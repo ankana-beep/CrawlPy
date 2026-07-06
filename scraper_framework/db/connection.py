@@ -35,13 +35,13 @@ def normalize_db_url(db_url: str) -> str:
 
 
 def get_database_url() -> str:
-    return os.getenv("SUPABASE_URL") or os.getenv("DATABASE_URL", "")
+    return os.getenv("SUPABASE_DB_URL") or os.getenv("SUPABASE_URL") or os.getenv("DATABASE_URL", "")
 
 
 def create_db_session(db_url: str | None = None, pool_size: int = 5):
     db_url = db_url or get_database_url()
     if not db_url:
-        raise ValueError("Database URL must be provided via SUPABASE_URL or db_url argument.")
+        raise ValueError("Database URL must be provided via SUPABASE_DB_URL, SUPABASE_URL, or db_url argument.")
 
     db_url = normalize_db_url(db_url)
     engine = create_engine(db_url, pool_size=pool_size)
