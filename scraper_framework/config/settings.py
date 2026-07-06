@@ -7,15 +7,16 @@ from pathlib import Path
 from typing import List, Optional
 from urllib.parse import quote_plus
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
-
 DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 USER_AGENT_POOL_PATH = Path(__file__).resolve().with_name("user_agents_pool.txt")
+ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
+
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(ENV_PATH)
+except ImportError:
+    pass
 
 
 def _load_user_agents() -> List[str]:
