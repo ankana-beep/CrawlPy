@@ -43,6 +43,18 @@ Force browser rendering (Playwright/Selenium) for dynamic pages:
 python3 -m scraper_framework.main --site site_b --target https://example.com --use-browser
 ```
 
+Load the Citrus County Accela Building page and list the permit dropdown options:
+
+```bash
+python3 -m scraper_framework.main --site accela_building --target "https://aca-prod.accela.com/CITRUS/Cap/CapHome.aspx?module=Building"
+```
+
+Load the page and select a permit type by visible label:
+
+```bash
+python3 -m scraper_framework.main --site accela_building --target "https://aca-prod.accela.com/CITRUS/Cap/CapHome.aspx?module=Building" --permit-type-label "Residential"
+```
+
 If a page times out, increase the navigation timeout or change the wait mode:
 
 ```bash
