@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.python-version
+
+# Virtual environments
+venv/
+.env/
+env/
+.crawl-env/
+venv*/
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Playwright
+playwright-report/
+.playwright/
+
+# Pip
+pip-log.txt
+pip-delete-this-directory.txt
+
+# macOS
+.DS_Store
+
+# Environment files
+*.env
+
+# Cache
+.cache/

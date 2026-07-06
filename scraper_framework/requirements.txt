@@ -4,3 +4,5 @@ playwright
 beautifulsoup4
 lxml
 sqlalchemy
+python-dotenv
+supabase

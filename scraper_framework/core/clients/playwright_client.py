@@ -9,8 +9,12 @@ from .base_client import BaseClient
 class PlaywrightClient(BaseClient):
     def __init__(self, user_data_dir: Optional[str] = None, headless: bool = True):
         self.playwright = sync_playwright().start()
-        self.browser: Browser = self.playwright.chromium.launch(headless=headless)
-        self.context = self.browser.new_context(user_data_dir=user_data_dir)
+        if user_data_dir:
+            self.context = self.playwright.chromium.launch_persistent_context(user_data_dir=user_data_dir, headless=headless)
+            self.browser = self.context.browser
+        else:
+            self.browser: Browser = self.playwright.chromium.launch(headless=headless)
+            self.context = self.browser.new_context()
         self.page: Page = self.context.new_page()
 
     def fetch(self, url: str, method: str = "GET", headers: Optional[Dict[str, str]] = None, data: Any = None, **kwargs) -> str:
