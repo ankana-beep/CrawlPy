@@ -1,7 +1,9 @@
 """Application settings and credentials."""
 
 import os
+import random
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Optional
 from urllib.parse import quote_plus
 
@@ -10,6 +12,23 @@ try:
     load_dotenv()
 except ImportError:
     pass
+
+
+DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+USER_AGENT_POOL_PATH = Path(__file__).resolve().with_name("user_agents_pool.txt")
+
+
+def _load_user_agents() -> List[str]:
+    if USER_AGENT_POOL_PATH.exists():
+        user_agents = [
+            line.strip()
+            for line in USER_AGENT_POOL_PATH.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        if user_agents:
+            return user_agents
+
+    return [DEFAULT_USER_AGENT]
 
 
 @dataclass
@@ -53,11 +72,12 @@ class Settings:
 
         return f"{scheme}://{auth}{self.mongodb_host}{db_path}{params}"
 
+    def get_random_user_agent(self) -> str:
+        return random.choice(self.user_agents)
+
 settings = Settings(
     proxies=[],
-    user_agents=[
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-    ],
+    user_agents=_load_user_agents(),
     supabase_key=os.getenv("SUPABASE_KEY"),
     supabase_url=os.getenv("SUPABASE_URL"),
     supabase_table=os.getenv("SUPABASE_TABLE", "crawl"),

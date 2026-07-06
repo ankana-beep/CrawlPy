@@ -36,11 +36,12 @@ def main() -> None:
     args = parser.parse_args()
 
     service = SiteAService() if args.site == "site_a" else SiteBService()
+    user_agent = settings.get_random_user_agent()
 
     result = service.run(
         args.target,
         use_browser=args.use_browser,
-        headers={"User-Agent": settings.user_agents[0]},
+        headers={"User-Agent": user_agent},
         timeout_ms=args.timeout_ms,
         wait_until=args.wait_until,
         include_raw=args.save,

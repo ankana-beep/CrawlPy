@@ -13,6 +13,7 @@ pip install -r scraper_framework/requirements.txt
 Configure environment:
 
 - Copy `scraper_framework/.env.example` to `scraper_framework/.env` and fill in values.
+- Add one user agent per line in `scraper_framework/config/user_agents_pool.txt`. Each scrape run will pick one entry randomly. If the file is empty or missing, CrawlPy falls back to a built-in desktop Chrome user agent.
 
 Playwright browsers (Chromium example):
 
