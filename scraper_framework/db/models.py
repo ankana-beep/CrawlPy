@@ -1,24 +1,24 @@
-"""Database models and schemas."""
+"""Lightweight schema helpers for Supabase rows.
 
-from sqlalchemy import BigInteger, Column, DateTime, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import synonym
+This project uses Supabase REST/SDK (no direct Postgres connections), so we keep
+these as plain Python types rather than SQLAlchemy models.
+"""
 
-Base = declarative_base()
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Dict, Optional
 
 
-class ScrapedItem(Base):
-    __tablename__ = "crawl"
+@dataclass(slots=True)
+class ScrapedItem:
+    """Represents a row in the Supabase `crawl` table."""
 
-    id = Column(BigInteger, primary_key=True, index=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=True)
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+    url: str = ""
+    title: Optional[str] = None
+    text: Optional[str] = None
+    json_data: Optional[Dict[str, Any]] = None
 
-    url = Column(Text, nullable=False)
-    title = Column(Text, nullable=True)
-    text = Column(Text, nullable=True)
-    json_data = Column(JSONB, nullable=True)
-
-    # Backwards-compatible aliases for older code paths / payloads
-    content = synonym("text")
-    data = synonym("json_data")

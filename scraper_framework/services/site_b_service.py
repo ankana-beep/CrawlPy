@@ -15,14 +15,18 @@ class SiteBService(BaseService):
         self.parser = parser or BS4Parser()
 
     def run(self, target: str, use_browser: bool = False, **kwargs) -> Dict[str, Any]:
+        headers = kwargs.get("headers")
+        timeout_ms = kwargs.get("timeout_ms")
+        wait_until = kwargs.get("wait_until")
+
         if use_browser:
-            content = self.browser_client.fetch(target)
+            content = self.browser_client.fetch(target, headers=headers, timeout_ms=timeout_ms, wait_until=wait_until)
         else:
             try:
-                response = self.http_client.fetch(target, headers=kwargs.get("headers"))
+                response = self.http_client.fetch(target, headers=headers)
                 content = response.text
             except Exception:
-                content = self.browser_client.fetch(target)
+                content = self.browser_client.fetch(target, headers=headers, timeout_ms=timeout_ms, wait_until=wait_until)
 
         parsed = self.parser.parse(content)
         return {

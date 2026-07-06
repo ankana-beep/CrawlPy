@@ -1,33 +1,35 @@
-"""Supabase REST client for saving scraped results when Postgres is unreachable."""
+"""Supabase client for saving scraped results."""
 
 from typing import Any, Dict, Optional
 
-import requests
+from supabase import Client, create_client
 
 from scraper_framework.config.settings import settings
 
 
 class SupabaseClient:
-    def __init__(self, rest_url: Optional[str] = None, api_key: Optional[str] = None):
-        self.rest_url = rest_url or settings.supabase_rest_url
+    def __init__(self, url: Optional[str] = None, api_key: Optional[str] = None, table: Optional[str] = None):
+        self.url = url or settings.supabase_url
         self.api_key = api_key or settings.supabase_key
+        self.table = table or settings.supabase_table
 
-        if not self.rest_url:
-            raise ValueError("SUPABASE_REST_URL must be set to use Supabase REST save.")
+        if not self.url:
+            raise ValueError("SUPABASE_URL must be set to use Supabase save.")
         if not self.api_key:
-            raise ValueError("SUPABASE_KEY must be set to use Supabase REST save.")
+            raise ValueError("SUPABASE_KEY must be set to use Supabase save.")
+        if not self.table:
+            raise ValueError("SUPABASE_TABLE must be set to use Supabase save.")
 
-        self.headers = {
-            "apikey": self.api_key,
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-            "Prefer": "return=minimal",
-        }
+        self.client: Client = create_client(self.url, self.api_key)
 
     def insert(self, payload: Dict[str, Any]) -> Any:
-        response = requests.post(self.rest_url, headers=self.headers, json=payload)
-        if not response.ok:
-            raise RuntimeError(
-                f"Supabase REST insert failed: {response.status_code} {response.reason} - {response.text}"
-            )
-        return response.json() if response.text else {}
+        try:
+            result = self.client.table(self.table).insert(payload).execute()
+        except Exception as exc:  # supabase-py may raise ApiError/HTTPError depending on version
+            raise RuntimeError(f"Supabase insert failed: {exc}") from exc
+
+        error = getattr(result, "error", None)
+        if error:
+            raise RuntimeError(f"Supabase insert failed: {error}")
+
+        return getattr(result, "data", None)

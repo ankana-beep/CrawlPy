@@ -9,6 +9,7 @@ __pycache__/
 # Virtual environments
 venv/
 .env/
+.env
 env/
 .crawl-env/
 venv*/
@@ -35,6 +36,7 @@ pip-delete-this-directory.txt
 
 # Environment files
 *.env
+scraper_framework/.env
 
 # Cache
 .cache/

@@ -1,3 +1,3 @@
 """Database access package."""
 
-__all__ = ["connection", "models"]
+__all__ = ["models", "supabase_client"]

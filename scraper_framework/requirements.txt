@@ -3,8 +3,5 @@ undetected-chromedriver
 playwright
 beautifulsoup4
 lxml
-sqlalchemy
-psycopg2-binary
-requests
 python-dotenv
 supabase
