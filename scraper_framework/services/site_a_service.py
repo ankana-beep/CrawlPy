@@ -15,7 +15,11 @@ class SiteAService(BaseService):
     def run(self, target: str, **kwargs) -> Dict[str, Any]:
         response = self.client.fetch(target, headers=kwargs.get("headers"))
         parsed = self.parser.parse(response.text)
-        return {
+        include_raw = bool(kwargs.get("include_raw"))
+        out: Dict[str, Any] = {
             "target": target,
             "result": parsed,
         }
+        if include_raw:
+            out["raw_body"] = response.text
+        return out

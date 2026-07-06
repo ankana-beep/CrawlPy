@@ -1,6 +1,6 @@
 # CrawlPy
 
-Python scraping framework with HTTP + browser (Playwright/Selenium) support and optional persistence to Supabase/Postgres.
+Python scraping framework with HTTP + browser (Playwright/Selenium) support and MongoDB (primary) persistence.
 
 ## Setup
 
@@ -30,7 +30,7 @@ Run a scrape for any URL:
 python3 -m scraper_framework.main --site site_b --target https://example.com
 ```
 
-Save result to Supabase (requires `.env` configured):
+Save raw scrape to MongoDB (requires `.env` configured):
 
 ```bash
 python3 -m scraper_framework.main --site site_b --target https://example.com --save
@@ -48,9 +48,22 @@ If a page times out, increase the navigation timeout or change the wait mode:
 python3 -m scraper_framework.main --site site_b --target https://example.com --use-browser --timeout-ms 90000 --wait-until load
 ```
 
+## MongoDB
+
+`--save` writes the raw scrape JSON into MongoDB collection `scrapes` in `MONGODB_DB`.
+
+```bash
+MONGODB_SRV=true
+MONGODB_HOST=<cluster-host>
+MONGODB_USERNAME=<username>
+MONGODB_PASSWORD=<password>
+MONGODB_DB=crawlpy
+MONGODB_PARAMS=appName=CrawlPy
+```
+
 ## Supabase
 
-Env vars used by `--save`:
+Supabase is intended as a secondary store. A separate script can push selected fields from MongoDB into Supabase tables.
 
 ```bash
 SUPABASE_URL=https://<project-ref>.supabase.co

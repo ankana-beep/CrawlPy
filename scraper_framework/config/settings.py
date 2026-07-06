@@ -3,6 +3,7 @@
 import os
 from dataclasses import dataclass, field
 from typing import List, Optional
+from urllib.parse import quote_plus
 
 try:
     from dotenv import load_dotenv
@@ -24,6 +25,34 @@ class Settings:
     playwright_timeout_ms: int = 60000
     playwright_wait_until: str = "domcontentloaded"
 
+    mongodb_uri: Optional[str] = None
+    mongodb_srv: bool = True
+    mongodb_host: Optional[str] = None
+    mongodb_username: Optional[str] = None
+    mongodb_password: Optional[str] = None
+    mongodb_db: str = "crawlpy"
+    mongodb_params: str = ""
+
+    def build_mongodb_uri(self) -> str:
+        if self.mongodb_uri:
+            return self.mongodb_uri
+
+        if not self.mongodb_host:
+            raise ValueError("MongoDB host is required (MONGODB_HOST) when MONGODB_URI is not set.")
+
+        scheme = "mongodb+srv" if self.mongodb_srv else "mongodb"
+        auth = ""
+        if self.mongodb_username:
+            password = quote_plus(self.mongodb_password or "")
+            auth = f"{quote_plus(self.mongodb_username)}:{password}@"
+
+        db_path = f"/{self.mongodb_db}" if self.mongodb_db else ""
+        params = self.mongodb_params.strip()
+        if params and not params.startswith("?"):
+            params = "?" + params
+
+        return f"{scheme}://{auth}{self.mongodb_host}{db_path}{params}"
+
 settings = Settings(
     proxies=[],
     user_agents=[
@@ -36,4 +65,11 @@ settings = Settings(
     supabase_json_column=os.getenv("SUPABASE_JSON_COLUMN", "json_data") or None,
     playwright_timeout_ms=int(os.getenv("PLAYWRIGHT_TIMEOUT_MS", "60000")),
     playwright_wait_until=os.getenv("PLAYWRIGHT_WAIT_UNTIL", "domcontentloaded"),
+    mongodb_uri=os.getenv("MONGODB_URI"),
+    mongodb_srv=os.getenv("MONGODB_SRV", "true").lower() in {"1", "true", "yes", "y"},
+    mongodb_host=os.getenv("MONGODB_HOST"),
+    mongodb_username=os.getenv("MONGODB_USERNAME"),
+    mongodb_password=os.getenv("MONGODB_PASSWORD"),
+    mongodb_db=os.getenv("MONGODB_DB", "crawlpy"),
+    mongodb_params=os.getenv("MONGODB_PARAMS", ""),
 )

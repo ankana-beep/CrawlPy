@@ -18,6 +18,7 @@ class SiteBService(BaseService):
         headers = kwargs.get("headers")
         timeout_ms = kwargs.get("timeout_ms")
         wait_until = kwargs.get("wait_until")
+        include_raw = bool(kwargs.get("include_raw"))
 
         if use_browser:
             content = self.browser_client.fetch(target, headers=headers, timeout_ms=timeout_ms, wait_until=wait_until)
@@ -29,7 +30,10 @@ class SiteBService(BaseService):
                 content = self.browser_client.fetch(target, headers=headers, timeout_ms=timeout_ms, wait_until=wait_until)
 
         parsed = self.parser.parse(content)
-        return {
+        out: Dict[str, Any] = {
             "target": target,
             "result": parsed,
         }
+        if include_raw:
+            out["raw_html"] = content
+        return out

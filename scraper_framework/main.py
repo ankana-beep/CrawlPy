@@ -5,7 +5,7 @@ import json
 from typing import Dict
 
 from scraper_framework.config.settings import settings
-from scraper_framework.db.supabase_client import SupabaseClient
+from scraper_framework.db.mongo_client import MongoDBClient
 from scraper_framework.services.site_a_service import SiteAService
 from scraper_framework.services.site_b_service import SiteBService
 from scraper_framework.utils.logger import configure_logger
@@ -32,33 +32,34 @@ def main() -> None:
         default=None,
         help="Playwright wait_until mode for navigation",
     )
-    parser.add_argument("--save", action="store_true", help="Save scraped results to the configured database")
+    parser.add_argument("--save", action="store_true", help="Save raw scraped results to MongoDB")
     args = parser.parse_args()
 
     service = SiteAService() if args.site == "site_a" else SiteBService()
+
     result = service.run(
         args.target,
         use_browser=args.use_browser,
         headers={"User-Agent": settings.user_agents[0]},
         timeout_ms=args.timeout_ms,
         wait_until=args.wait_until,
+        include_raw=args.save,
     )
 
     logger.info("Scrape result: %s", result)
 
     if args.save:
-        supabase_client = SupabaseClient()
-        extracted = result.get("result") if isinstance(result.get("result"), dict) else {}
-        payload: Dict[str, object] = {
-            "url": args.target,
-            "title": extracted.get("title") if isinstance(extracted, dict) else None,
-        }
-        if settings.supabase_text_column:
-            payload[settings.supabase_text_column] = extracted.get("text") if isinstance(extracted, dict) else None
-        if settings.supabase_json_column:
-            payload[settings.supabase_json_column] = _json_safe(result)
-        supabase_client.insert(payload)
-        logger.info("Scrape result saved to Supabase.")
+        mongo = MongoDBClient()
+        try:
+            doc: Dict[str, object] = {
+                "target": args.target,
+                "site": args.site,
+                "raw": _json_safe(result),
+            }
+            inserted_id = mongo.insert_raw_scrape(doc)
+            logger.info("Raw scrape saved to MongoDB (scrapes._id=%s).", inserted_id)
+        finally:
+            mongo.close()
 
 
 if __name__ == "__main__":
