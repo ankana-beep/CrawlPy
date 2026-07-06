@@ -1,0 +1,6 @@
+curl-cffi
+undetected-chromedriver
+playwright
+beautifulsoup4
+lxml
+sqlalchemy

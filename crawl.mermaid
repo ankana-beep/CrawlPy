@@ -1,0 +1,35 @@
+mermaid
+flowchart TD
+    A["Start Scrape Job"] --> B["Load URL, Filters, Required Fields"]
+
+    B --> C["Check Site Config"]
+
+    C --> D{"Known Site?"}
+
+    D -- "Yes" --> E["Use Stored Selectors / Rules"]
+    D -- "No" --> F["Use Generic Discovery Logic"]
+
+    E --> G["Try HTTP Fetch"]
+    F --> G
+
+    G --> H{"Required Data Found?"}
+
+    H -- "Yes" --> Z["Extract + Return Data"]
+    H -- "No" --> I["Try Selenium"]
+
+    I --> J{"Required Data Found?"}
+
+    J -- "Yes" --> Z
+    J -- "No" --> K["Try Playwright"]
+
+    K --> L{"Required Data Found?"}
+
+    L -- "Yes" --> Z
+    L -- "No" --> M["Capture Failure Evidence"]
+
+    M --> N{"Retry Possible?"}
+
+    N -- "Yes" --> O["Retry With Backoff / Different Browser Context"]
+    O --> K
+
+    N -- "No" --> P["Mark Failed / Manual Review"]
