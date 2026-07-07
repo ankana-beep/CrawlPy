@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from scraper_framework.db.mongo_client import MongoDBClient
 
@@ -31,9 +31,10 @@ class CrawlMongoStore:
         payload.setdefault("created_at", datetime.now(timezone.utc))
         return self.mongo.db[collection].insert_one(payload).inserted_id
 
-    def save_records(self, docs: Iterable[Dict[str, Any]], collection: str) -> Tuple[int, int]:
+    def save_records(self, docs: Iterable[Dict[str, Any]], collection: str) -> Tuple[int, int, List[Any]]:
         inserted = 0
         skipped = 0
+        record_ids: List[Any] = []
         for doc in docs:
             payload = dict(doc)
             payload.setdefault("created_at", datetime.now(timezone.utc))
@@ -45,11 +46,13 @@ class CrawlMongoStore:
                 {"_id": 1},
             )
             if existing:
+                record_ids.append(existing["_id"])
                 skipped += 1
                 continue
-            self.mongo.db[collection].insert_one(payload)
+            inserted_id = self.mongo.db[collection].insert_one(payload).inserted_id
+            record_ids.append(inserted_id)
             inserted += 1
-        return inserted, skipped
+        return inserted, skipped, record_ids
 
     def close(self) -> None:
         self.mongo.close()

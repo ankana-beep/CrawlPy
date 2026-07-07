@@ -64,11 +64,26 @@ Save raw/debug crawl artifacts too:
 python3 -m scraper_framework.smart_crawler.cli https://county.example.gov --save-artifacts
 ```
 
+When debug artifacts are saved, each artifact includes:
+
+- `permit_collection`
+- `permit_record_ids`
+
+Those fields link the raw/debug crawl evidence back to the main permit documents.
+
 Run from a URL list:
 
 ```bash
 python3 -m scraper_framework.smart_crawler.cli --urls-file seeds.txt --max-pages 200
 ```
+
+Run a URL list one website at a time:
+
+```bash
+python3 -m scraper_framework.smart_crawler.cli --urls-file seeds.txt --sequential-sites --max-pages 40 --max-depth 2
+```
+
+With `--sequential-sites`, each URL gets its own crawl run and `--max-pages` applies per website.
 
 Use HTTP-only mode:
 
@@ -81,7 +96,7 @@ Important defaults:
 - Same-domain crawling is enabled by default.
 - `robots.txt` is respected by default.
 - Each domain has a configurable delay, default `1.0` second.
-- Transient failures use exponential retry.
+- HTTP and browser/render failures use bounded exponential retry from `--max-retries`; after retries are exhausted, that part is skipped and the crawl continues.
 - MongoDB creates document `_id` values automatically; crawler-generated trace keys are stored separately as normal fields.
 - Duplicate permit records are skipped using `record_key` + `record_fingerprint`; changed permit data is inserted as a new snapshot.
 - Permit-like pages and APIs are queued before generic links when the objective layer is enabled.

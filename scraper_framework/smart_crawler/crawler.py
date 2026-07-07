@@ -26,7 +26,7 @@ from scraper_framework.smart_crawler.models import (
 )
 from scraper_framework.smart_crawler.permit_objective import LEGACY_OBJECTIVE_NAMES, OBJECTIVE_NAME, PermitObjectiveExtractor
 from scraper_framework.smart_crawler.rate_limiter import DomainRateLimiter
-from scraper_framework.smart_crawler.retry import RETRYABLE_STATUS_CODES, with_retries
+from scraper_framework.smart_crawler.retry import RETRYABLE_STATUS_CODES, RetryExhausted, with_retries
 from scraper_framework.smart_crawler.robots import RobotsGuard, robots_url_for
 from scraper_framework.smart_crawler.storage import CrawlMongoStore
 from scraper_framework.smart_crawler.url_tools import looks_like_file, looks_like_feed, normalize_url
@@ -151,7 +151,9 @@ class SmartCrawler:
                     artifact = self._crawl_target(target, frontier)
                     if save and self.store:
                         permit_collection = self._collection_for_url(self.options.permit_collection, artifact.get("final_url") or target.url)
-                        saved_permits, skipped_permits = self._save_objective_records(artifact, permit_collection)
+                        saved_permits, skipped_permits, permit_record_ids = self._save_objective_records(artifact, permit_collection)
+                        artifact["permit_collection"] = permit_collection
+                        artifact["permit_record_ids"] = [str(record_id) for record_id in permit_record_ids]
                         permit_records_saved += saved_permits
                         permit_records_duplicate += skipped_permits
                         stats.saved += saved_permits
@@ -305,7 +307,23 @@ class SmartCrawler:
 
             if self.options.include_browser and self._should_render(extracted):
                 self.logger.info("Browser render selected url=%s reason=low_text_or_forms_or_app_shell", target.url)
-                artifact["browser"] = self._collect_browser(target, frontier)
+                try:
+                    artifact["browser"] = self._collect_browser_with_retry(target, frontier)
+                except RetryExhausted as exc:
+                    self.logger.warning(
+                        "Browser render skipped after retries url=%s attempts=%s error=%s",
+                        target.url,
+                        self.options.max_retries + 1,
+                        exc,
+                    )
+                    artifact["failures"].append(
+                        {
+                            "stage": "browser_render",
+                            "message": str(exc),
+                            "retryable": False,
+                            "attempts": self.options.max_retries + 1,
+                        }
+                    )
             elif self.options.include_browser:
                 self.logger.info("Browser render skipped url=%s reason=http_html_has_enough_content", target.url)
         else:
@@ -337,6 +355,26 @@ class SmartCrawler:
                 self.logger.warning("Retryable HTTP status=%s url=%s", result.status_code, url)
                 raise RuntimeError(f"Retryable HTTP status {result.status_code}")
             return result
+
+        return with_retries(
+            operation,
+            max_retries=self.options.max_retries,
+            backoff_seconds=self.options.backoff_seconds,
+        )
+
+    def _collect_browser_with_retry(self, target: CrawlTarget, frontier: CrawlFrontier) -> Dict[str, Any]:
+        attempt = 0
+
+        def operation() -> Dict[str, Any]:
+            nonlocal attempt
+            attempt += 1
+            self.logger.info("Browser attempt %s/%s url=%s", attempt, self.options.max_retries + 1, target.url)
+            try:
+                return self._collect_browser(target, frontier)
+            except Exception as exc:
+                self.logger.warning("Browser attempt failed url=%s attempt=%s error=%s", target.url, attempt, exc)
+                self._reset_browser()
+                raise
 
         return with_retries(
             operation,
@@ -385,6 +423,15 @@ class SmartCrawler:
             payload["screenshot_base64"] = base64.b64encode(browser_result.screenshot_bytes).decode("ascii")
         payload.pop("screenshot_bytes", None)
         return payload
+
+    def _reset_browser(self) -> None:
+        if self.browser is None:
+            return
+        try:
+            self.browser.close()
+        except Exception:
+            pass
+        self.browser = None
 
     def _queue_optional_discoveries(self, extracted: Any, target: CrawlTarget, frontier: CrawlFrontier) -> None:
         if self.options.include_files:
@@ -474,9 +521,9 @@ class SmartCrawler:
         inserted_id, inserted = self.store.save_artifact(artifact, collection)
         return str(inserted_id), inserted
 
-    def _save_objective_records(self, artifact: Dict[str, Any], collection: str) -> tuple[int, int]:
+    def _save_objective_records(self, artifact: Dict[str, Any], collection: str) -> tuple[int, int, List[Any]]:
         if not self.store or not self.objective_extractor:
-            return 0, 0
+            return 0, 0, []
         records: List[Dict[str, Any]] = []
         objective = artifact.get("objective") or {}
         records.extend(objective.get("standardized_records") or [])
@@ -484,7 +531,7 @@ class SmartCrawler:
         browser_objective = browser.get("objective") or {}
         records.extend(browser_objective.get("standardized_records") or [])
         if not records:
-            return 0, 0
+            return 0, 0, []
         return self.store.save_records(records, collection)
 
     def _artifact_key(self, url: str, artifact_type: str) -> str:

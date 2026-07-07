@@ -29,55 +29,82 @@ class BrowserCollector:
         page.on("request", lambda request: _capture_request(network_calls, request))
         page.on("response", lambda response: _capture_response(network_calls, response))
 
-        timeout = int(timeout_ms or settings.playwright_timeout_ms)
-        wait_mode = wait_until or settings.playwright_wait_until
-        page.goto(url, wait_until=wait_mode, timeout=timeout)
         try:
-            page.wait_for_load_state("networkidle", timeout=5000)
-        except Exception:
-            pass
+            timeout = int(timeout_ms or settings.playwright_timeout_ms)
+            wait_mode = wait_until or settings.playwright_wait_until
+            page.goto(url, wait_until=wait_mode, timeout=timeout)
+            try:
+                page.wait_for_load_state("networkidle", timeout=5000)
+            except Exception:
+                pass
 
-        rendered_html = page.content()
-        title = page.title()
-        text = page.locator("body").inner_text(timeout=5000) if page.locator("body").count() else ""
-        local_storage = _storage_snapshot(page, "localStorage")
-        session_storage = _storage_snapshot(page, "sessionStorage")
-        cookies = self.context.cookies()
-        screenshot_bytes = page.screenshot(full_page=True) if self.screenshot else None
-        final_url = page.url
-        page.close()
+            rendered_html = page.content()
+            title = page.title()
+            text = page.locator("body").inner_text(timeout=5000) if page.locator("body").count() else ""
+            local_storage = _storage_snapshot(page, "localStorage")
+            session_storage = _storage_snapshot(page, "sessionStorage")
+            cookies = self.context.cookies()
+            screenshot_bytes = page.screenshot(full_page=True) if self.screenshot else None
+            final_url = page.url
 
-        return BrowserResult(
-            final_url=final_url,
-            rendered_html=rendered_html,
-            text=text,
-            title=title,
-            cookies=cookies,
-            local_storage=local_storage,
-            session_storage=session_storage,
-            network_calls=network_calls,
-            console_messages=console_messages,
-            screenshot_bytes=screenshot_bytes,
-        )
+            return BrowserResult(
+                final_url=final_url,
+                rendered_html=rendered_html,
+                text=text,
+                title=title,
+                cookies=cookies,
+                local_storage=local_storage,
+                session_storage=session_storage,
+                network_calls=network_calls,
+                console_messages=console_messages,
+                screenshot_bytes=screenshot_bytes,
+            )
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
 
     def close(self) -> None:
-        self.context.close()
-        self.browser.close()
-        self.playwright.stop()
+        for resource in (self.context, self.browser, self.playwright):
+            try:
+                resource.close() if hasattr(resource, "close") else resource.stop()
+            except Exception:
+                pass
 
 
 def _capture_request(network_calls: List[Dict[str, Any]], request: Any) -> None:
-    post_data = request.post_data
-    network_calls.append(
-        {
-            "event": "request",
-            "url": request.url,
-            "method": request.method,
-            "resource_type": request.resource_type,
-            "headers": dict(request.headers),
-            "post_data": post_data[:10000] if post_data else None,
-        }
-    )
+    entry = {
+        "event": "request",
+        "url": request.url,
+        "method": request.method,
+        "resource_type": request.resource_type,
+        "headers": dict(request.headers),
+    }
+    _attach_post_data(entry, request)
+    network_calls.append(entry)
+
+
+def _attach_post_data(entry: Dict[str, Any], request: Any) -> None:
+    try:
+        post_data = request.post_data
+        entry["post_data"] = post_data[:10000] if post_data else None
+        return
+    except UnicodeDecodeError as exc:
+        entry["post_data_error"] = f"non_utf8_post_data: {exc}"
+    except Exception as exc:
+        entry["post_data_error"] = str(exc)
+
+    try:
+        post_bytes = request.post_data_buffer
+        if callable(post_bytes):
+            post_bytes = post_bytes()
+        if post_bytes:
+            entry["post_data_base64"] = base64.b64encode(post_bytes[:500_000]).decode("ascii")
+            entry["post_data_encoding"] = "base64"
+            entry["post_data_size_bytes"] = len(post_bytes)
+    except Exception as exc:
+        entry["post_data_buffer_error"] = str(exc)
 
 
 def _capture_response(network_calls: List[Dict[str, Any]], response: Any) -> None:

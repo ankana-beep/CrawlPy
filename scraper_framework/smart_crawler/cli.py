@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import List
+from typing import Any, Dict, List
 
 from scraper_framework.smart_crawler.crawler import SmartCrawler
 from scraper_framework.smart_crawler.models import CrawlOptions
@@ -39,13 +39,26 @@ def main() -> None:
     parser.add_argument("--permit-collection", default="building_permits", help="MongoDB collection for standardized permit records")
     parser.add_argument("--single-collection", action="store_true", help="Do not suffix collection names by website domain")
     parser.add_argument("--save-artifacts", action="store_true", help="Also save debug crawl artifacts; default saves only permit records")
+    parser.add_argument(
+        "--sequential-sites",
+        action="store_true",
+        help="Crawl each seed URL as a separate run; max-pages applies to each site",
+    )
     args = parser.parse_args()
 
     urls = _collect_urls(args.urls, args.urls_file)
     if not urls:
         raise SystemExit("Provide at least one URL or --urls-file.")
 
-    options = CrawlOptions(
+    if args.sequential_sites:
+        result = _crawl_sequential(urls, args)
+    else:
+        result = SmartCrawler(_build_options(args)).crawl(urls, save=not args.no_save)
+    print(json.dumps(result, indent=2, default=str))
+
+
+def _build_options(args: argparse.Namespace) -> CrawlOptions:
+    return CrawlOptions(
         max_pages=args.max_pages,
         max_depth=args.max_depth,
         same_domain_only=not args.allow_cross_domain,
@@ -65,8 +78,50 @@ def main() -> None:
         collection_per_domain=not args.single_collection,
         save_crawl_artifacts=args.save_artifacts,
     )
-    result = SmartCrawler(options).crawl(urls, save=not args.no_save)
-    print(json.dumps(result, indent=2, default=str))
+
+
+def _crawl_sequential(urls: List[str], args: argparse.Namespace) -> Dict[str, Any]:
+    site_results = []
+    totals = {
+        "queued": 0,
+        "visited": 0,
+        "saved": 0,
+        "failed": 0,
+        "skipped": 0,
+        "duplicates": 0,
+        "permit_records_saved": 0,
+        "permit_records_duplicate": 0,
+    }
+    collections = set()
+    permit_collections = set()
+
+    for index, url in enumerate(urls, start=1):
+        options = _build_options(args)
+        result = SmartCrawler(options).crawl([url], save=not args.no_save)
+        site_result = {
+            "index": index,
+            "seed_url": url,
+            **result,
+        }
+        site_results.append(site_result)
+
+        stats = result.get("stats", {})
+        for key in ("queued", "visited", "saved", "failed", "skipped", "duplicates"):
+            totals[key] += int(stats.get(key, 0))
+        totals["permit_records_saved"] += int(result.get("permit_records_saved", 0))
+        totals["permit_records_duplicate"] += int(result.get("permit_records_duplicate", 0))
+        collections.update(result.get("collections", []))
+        permit_collections.update(result.get("permit_collections", []))
+
+    return {
+        "mode": "sequential_sites",
+        "site_count": len(urls),
+        "max_pages_per_site": args.max_pages,
+        "totals": totals,
+        "collections": sorted(collections),
+        "permit_collections": sorted(permit_collections),
+        "sites": site_results,
+    }
 
 
 def _collect_urls(cli_urls: List[str], urls_file: str | None) -> List[str]:
