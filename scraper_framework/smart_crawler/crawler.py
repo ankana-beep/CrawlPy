@@ -29,7 +29,14 @@ from scraper_framework.smart_crawler.rate_limiter import DomainRateLimiter
 from scraper_framework.smart_crawler.retry import RETRYABLE_STATUS_CODES, RetryExhausted, with_retries
 from scraper_framework.smart_crawler.robots import RobotsGuard, robots_url_for
 from scraper_framework.smart_crawler.storage import CrawlMongoStore
-from scraper_framework.smart_crawler.url_tools import looks_like_file, looks_like_feed, normalize_url
+from scraper_framework.smart_crawler.url_tools import (
+    is_static_content_type,
+    looks_like_file,
+    looks_like_feed,
+    looks_like_static_asset,
+    normalize_url,
+    should_skip_url,
+)
 from scraper_framework.utils.logger import configure_logger
 
 
@@ -106,6 +113,28 @@ class SmartCrawler:
                 if target is None:
                     break
                 if target.url in frontier.visited:
+                    continue
+
+                if should_skip_url(target.url):
+                    stats.skipped += 1
+                    stats.queued = len(frontier)
+                    self.logger.info(
+                        "Skipped blocked utility endpoint depth=%s source=%s url=%s",
+                        target.depth,
+                        target.source,
+                        target.url,
+                    )
+                    continue
+
+                if looks_like_static_asset(target.url):
+                    stats.skipped += 1
+                    stats.queued = len(frontier)
+                    self.logger.info(
+                        "Skipped static asset endpoint depth=%s source=%s url=%s",
+                        target.depth,
+                        target.source,
+                        target.url,
+                    )
                     continue
 
                 if not self.robots.allowed(target.url):
@@ -454,6 +483,12 @@ class SmartCrawler:
         next_depth = target.depth + 1
         queued = 0
         for url in urls:
+            if should_skip_url(url):
+                self.logger.info("Skipped blocked utility discovery source=%s url=%s parent=%s", source, url, target.url)
+                continue
+            if looks_like_static_asset(url):
+                self.logger.info("Skipped static asset discovery source=%s url=%s parent=%s", source, url, target.url)
+                continue
             if next_depth <= self.options.max_depth or looks_like_file(url) or looks_like_feed(url):
                 priority = self._priority_for_url(url)
                 if frontier.add(url, depth=next_depth, source=source, parent_url=target.url, priority=priority):
@@ -507,12 +542,39 @@ class SmartCrawler:
         return text_len < 500 or bool(extracted.forms) or has_app_shell
 
     def _http_payload(self, fetch_result: FetchResult) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"body_text": fetch_result.body_text}
-        if self.options.save_binary_files and fetch_result.body_bytes and fetch_result.body_text is None:
+        body_bytes = fetch_result.body_bytes or b""
+        body_hash = hashlib.sha256(body_bytes).hexdigest() if body_bytes else None
+        is_static = looks_like_static_asset(fetch_result.final_url or fetch_result.url) or is_static_content_type(fetch_result.content_type)
+        payload: Dict[str, Any] = {
+            "body_size_bytes": len(body_bytes),
+            "body_sha256": body_hash,
+            "body_stored": False,
+            "body_storage_reason": "empty",
+        }
+
+        if not body_bytes:
+            return payload
+
+        if is_static:
+            payload["body_storage_reason"] = "static_asset_metadata_only"
+            return payload
+
+        max_body_bytes = 1_000_000
+        if len(body_bytes) > max_body_bytes:
+            payload["body_storage_reason"] = f"too_large_metadata_only_over_{max_body_bytes}_bytes"
+            return payload
+
+        if fetch_result.body_text is not None:
+            payload["body_text"] = fetch_result.body_text
+            payload["body_stored"] = True
+            payload["body_storage_reason"] = "text"
+        elif self.options.save_binary_files:
             payload["body_base64"] = base64.b64encode(fetch_result.body_bytes).decode("ascii")
             payload["body_encoding"] = "base64"
-        elif fetch_result.body_bytes and fetch_result.body_text is None:
-            payload["body_size_bytes"] = len(fetch_result.body_bytes)
+            payload["body_stored"] = True
+            payload["body_storage_reason"] = "binary_base64"
+        else:
+            payload["body_storage_reason"] = "binary_metadata_only"
         return payload
 
     def _save_artifact(self, artifact: Dict[str, Any], collection: str) -> tuple[str, bool]:

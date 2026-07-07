@@ -17,8 +17,50 @@ FILE_EXTENSIONS = {
     ".zip",
 }
 
+STATIC_ASSET_EXTENSIONS = {
+    ".avif",
+    ".css",
+    ".eot",
+    ".gif",
+    ".ico",
+    ".jpeg",
+    ".jpg",
+    ".js",
+    ".map",
+    ".mp3",
+    ".mp4",
+    ".otf",
+    ".png",
+    ".svg",
+    ".ttf",
+    ".wav",
+    ".webm",
+    ".webp",
+    ".woff",
+    ".woff2",
+}
+
+STATIC_CONTENT_TYPE_HINTS = (
+    "font/",
+    "image/",
+    "audio/",
+    "video/",
+    "text/css",
+    "javascript",
+    "application/x-javascript",
+    "application/font",
+    "application/octet-stream",
+)
+
 FEED_HINTS = ("rss", "atom", "feed")
 API_HINTS = ("/api/", "/graphql", "/rest/", ".json", "/v1/", "/v2/", "/wp-json/")
+SKIP_URL_KEYWORDS = (
+    "captchaverify",
+    "captcha",
+    "verifycaptcha",
+    "login",
+    "logout",
+)
 
 
 def normalize_url(url: str, base_url: Optional[str] = None) -> Optional[str]:
@@ -49,6 +91,16 @@ def looks_like_file(url: str) -> bool:
     return any(path.endswith(ext) for ext in FILE_EXTENSIONS)
 
 
+def looks_like_static_asset(url: str) -> bool:
+    path = urlparse(url).path.lower()
+    return any(path.endswith(ext) for ext in STATIC_ASSET_EXTENSIONS)
+
+
+def is_static_content_type(content_type: str) -> bool:
+    lowered = content_type.lower()
+    return any(hint in lowered for hint in STATIC_CONTENT_TYPE_HINTS)
+
+
 def looks_like_feed(url: str) -> bool:
     lowered = url.lower()
     return any(hint in lowered for hint in FEED_HINTS)
@@ -57,6 +109,11 @@ def looks_like_feed(url: str) -> bool:
 def looks_like_api(url: str) -> bool:
     lowered = url.lower()
     return any(hint in lowered for hint in API_HINTS)
+
+
+def should_skip_url(url: str) -> bool:
+    lowered = url.lower()
+    return any(keyword in lowered for keyword in SKIP_URL_KEYWORDS)
 
 
 def unique_urls(urls: Iterable[str]) -> List[str]:

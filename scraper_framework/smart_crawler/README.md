@@ -97,6 +97,8 @@ Important defaults:
 - `robots.txt` is respected by default.
 - Each domain has a configurable delay, default `1.0` second.
 - HTTP and browser/render failures use bounded exponential retry from `--max-retries`; after retries are exhausted, that part is skipped and the crawl continues.
+- Static assets such as JS, CSS, images, fonts, and source maps are skipped before fetch because they are not permit records.
+- Large/debug artifact bodies are protected before MongoDB insert; static or oversized bodies keep URL/status/headers/content type/size/hash metadata instead of full content.
 - MongoDB creates document `_id` values automatically; crawler-generated trace keys are stored separately as normal fields.
 - Duplicate permit records are skipped using `record_key` + `record_fingerprint`; changed permit data is inserted as a new snapshot.
 - Permit-like pages and APIs are queued before generic links when the objective layer is enabled.
