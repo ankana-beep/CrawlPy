@@ -9,7 +9,8 @@ from .base_client import BaseClient
 
 
 class PlaywrightClient(BaseClient):
-    def __init__(self, user_data_dir: Optional[str] = None, headless: bool = True):
+    def __init__(self, user_data_dir: Optional[str] = None, headless: Optional[bool] = None):
+        headless = settings.playwright_headless if headless is None else headless
         self.playwright = sync_playwright().start()
         if user_data_dir:
             self.context = self.playwright.chromium.launch_persistent_context(user_data_dir=user_data_dir, headless=headless)

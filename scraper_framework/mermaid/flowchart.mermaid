@@ -1,0 +1,54 @@
+flowchart TD
+    A[Input: Multiple Website URLs] --> B[Job Manager]
+
+    B --> C[Domain Normalizer]
+    C --> D[Site Profile Builder]
+
+    D --> E[Robots.txt + Sitemap + RSS Checker]
+    E --> F[Permission + Scope Checker]
+
+    F --> G{Allowed?}
+    G -- No --> H[Skip Site + Save Reason]
+    G -- Yes --> I[URL Frontier]
+
+    I --> J[Rate Limit Manager]
+    J --> K[Page Fetch Orchestrator]
+
+    K --> L1[HTTP HTML Fetcher]
+    K --> L2[Rendered DOM Fetcher: Playwright]
+    K --> L3[Network/API Detector]
+    K --> L4[Embedded JSON Extractor]
+    K --> L5[Structured Data Extractor]
+    K --> L6[File Downloader + Parser]
+    K --> L7[RSS/Sitemap Parser]
+
+    L1 --> M[Page Classifier]
+    L2 --> M
+    L3 --> M
+    L4 --> M
+    L5 --> M
+    L6 --> M
+    L7 --> M
+
+    M --> N[Universal Content Normalizer]
+    N --> O[Dynamic Field Discovery]
+    O --> P[Rule-based Extractor]
+    P --> Q{Enough Confidence?}
+
+    Q -- Yes --> R[Schema Normalizer]
+    Q -- No --> S[AI Extraction Layer]
+    S --> R
+
+    R --> T[Validation + Cleaning]
+    T --> U[Deduplication]
+    U --> V[(MongoDB)]
+
+    V --> W[Export: JSON/CSV/Excel/API]
+
+    K --> X[Failure Handler]
+    X --> Y[Retry Queue]
+    Y --> J
+
+    H --> Z[Logs + Metrics]
+    X --> Z
+    V --> Z

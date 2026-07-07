@@ -43,6 +43,7 @@ class Settings:
     supabase_json_column: Optional[str] = "json_data"
     playwright_timeout_ms: int = 60000
     playwright_wait_until: str = "domcontentloaded"
+    playwright_headless: bool = True
 
     mongodb_uri: Optional[str] = None
     mongodb_srv: bool = True
@@ -85,6 +86,7 @@ settings = Settings(
     supabase_json_column=os.getenv("SUPABASE_JSON_COLUMN", "json_data") or None,
     playwright_timeout_ms=int(os.getenv("PLAYWRIGHT_TIMEOUT_MS", "60000")),
     playwright_wait_until=os.getenv("PLAYWRIGHT_WAIT_UNTIL", "domcontentloaded"),
+    playwright_headless=os.getenv("PLAYWRIGHT_HEADLESS", "true").lower() in {"1", "true", "yes", "y"},
     mongodb_uri=os.getenv("MONGODB_URI"),
     mongodb_srv=os.getenv("MONGODB_SRV", "true").lower() in {"1", "true", "yes", "y"},
     mongodb_host=os.getenv("MONGODB_HOST"),
