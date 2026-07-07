@@ -38,7 +38,7 @@ class CrawlMongoStore:
 
     def save_records(self, docs: Iterable[Dict[str, Any]], collection: str) -> Tuple[int, int, List[Any]]:
         inserted = 0
-        skipped = 0
+        duplicates = 0
         record_ids: List[Any] = []
         for doc in docs:
             payload = dict(doc)
@@ -51,13 +51,16 @@ class CrawlMongoStore:
                 {"_id": 1},
             )
             if existing:
-                record_ids.append(existing["_id"])
-                skipped += 1
-                continue
+                payload["is_duplicate"] = True
+                payload["duplicate_of_id"] = existing["_id"]
+                payload["duplicate_detected_at"] = datetime.now(timezone.utc)
+                duplicates += 1
+            else:
+                payload["is_duplicate"] = False
             inserted_id = self.mongo.db[collection].insert_one(payload).inserted_id
             record_ids.append(inserted_id)
             inserted += 1
-        return inserted, skipped, record_ids
+        return inserted, duplicates, record_ids
 
     def close(self) -> None:
         self.mongo.close()

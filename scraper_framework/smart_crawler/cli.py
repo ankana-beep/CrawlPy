@@ -44,6 +44,10 @@ def main() -> None:
         action="store_true",
         help="Crawl each seed URL as a separate run; max-pages applies to each site",
     )
+    parser.add_argument("--no-workflows", action="store_true", help="Disable intelligent permit search/form workflows")
+    parser.add_argument("--workflow-date-lookback-days", type=int, default=365, help="Date range lookback used by permit search workflows")
+    parser.add_argument("--workflow-max-detail-pages", type=int, default=25, help="Maximum permit detail pages opened per workflow page")
+    parser.add_argument("--workflow-max-pages", type=int, default=5, help="Maximum paginated result pages clicked per workflow page")
     args = parser.parse_args()
 
     urls = _collect_urls(args.urls, args.urls_file)
@@ -77,6 +81,10 @@ def _build_options(args: argparse.Namespace) -> CrawlOptions:
         permit_collection=args.permit_collection,
         collection_per_domain=not args.single_collection,
         save_crawl_artifacts=args.save_artifacts,
+        enable_permit_workflows=not args.no_workflows,
+        workflow_date_lookback_days=args.workflow_date_lookback_days,
+        workflow_max_detail_pages=args.workflow_max_detail_pages,
+        workflow_max_pages=args.workflow_max_pages,
     )
 
 

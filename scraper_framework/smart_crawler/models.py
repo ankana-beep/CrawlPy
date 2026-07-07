@@ -112,6 +112,10 @@ class CrawlOptions:
     permit_collection: str = "building_permits"
     collection_per_domain: bool = True
     save_crawl_artifacts: bool = False
+    enable_permit_workflows: bool = True
+    workflow_date_lookback_days: int = 365
+    workflow_max_detail_pages: int = 25
+    workflow_max_pages: int = 5
 
 
 @dataclass(slots=True)

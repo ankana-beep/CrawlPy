@@ -14,17 +14,20 @@ from urllib.parse import urlparse
 from scraper_framework.config.settings import settings
 from scraper_framework.smart_crawler.browser_collector import BrowserCollector
 from scraper_framework.smart_crawler.extractors import GenericExtractor
-from scraper_framework.smart_crawler.fetcher import SmartHTTPFetcher
+from scraper_framework.smart_crawler.fetcher import SmartHTTPFetcher, is_ssl_certificate_error, system_ca_bundle_path
 from scraper_framework.smart_crawler.frontier import CrawlFrontier
 from scraper_framework.smart_crawler.models import (
     CrawlFailure,
     CrawlOptions,
     CrawlStats,
     CrawlTarget,
+    ExtractedPage,
     FetchResult,
     utc_now,
 )
 from scraper_framework.smart_crawler.permit_objective import LEGACY_OBJECTIVE_NAMES, OBJECTIVE_NAME, PermitObjectiveExtractor
+from scraper_framework.smart_crawler.permit_workflows import GenericPermitWorkflow, PermitWorkflowOptions
+from scraper_framework.smart_crawler.permit_workflows.detector import should_run_workflow
 from scraper_framework.smart_crawler.rate_limiter import DomainRateLimiter
 from scraper_framework.smart_crawler.retry import RETRYABLE_STATUS_CODES, RetryExhausted, with_retries
 from scraper_framework.smart_crawler.robots import RobotsGuard, robots_url_for
@@ -60,6 +63,7 @@ class SmartCrawler:
             if self.options.objective in {OBJECTIVE_NAME, *LEGACY_OBJECTIVE_NAMES}
             else None
         )
+        self.workflow = GenericPermitWorkflow(self.objective_extractor, self.extractor) if self.objective_extractor else None
         self.fetcher = SmartHTTPFetcher(timeout_seconds=self.options.request_timeout_seconds, user_agent=self.user_agent)
         self.rate_limiter = DomainRateLimiter(self.options.delay_seconds)
         self.robots = RobotsGuard(self.user_agent, enabled=self.options.respect_robots_txt)
@@ -81,7 +85,7 @@ class SmartCrawler:
         used_permit_collections: set[str] = set()
 
         self.logger.info(
-            "Starting permit crawl run_id=%s objective=%s prioritize_objective=%s seeds=%s max_pages=%s max_depth=%s save=%s save_artifacts=%s browser=%s same_domain_only=%s robots=%s collection_per_domain=%s",
+            "Starting permit crawl run_id=%s objective=%s prioritize_objective=%s seeds=%s max_pages=%s max_depth=%s save=%s save_artifacts=%s browser=%s workflows=%s same_domain_only=%s robots=%s collection_per_domain=%s",
             self.run_id,
             self.options.objective,
             self.options.prioritize_objective,
@@ -91,6 +95,7 @@ class SmartCrawler:
             save,
             self.options.save_crawl_artifacts,
             self.options.include_browser,
+            self.options.enable_permit_workflows,
             self.options.same_domain_only,
             self.options.respect_robots_txt,
             self.options.collection_per_domain,
@@ -178,6 +183,22 @@ class SmartCrawler:
                 )
                 try:
                     artifact = self._crawl_target(target, frontier)
+                    if artifact.get("crawl_failed"):
+                        stats.failed += 1
+                        self._record_failure(
+                            CrawlFailure(
+                                stage=artifact.get("failure_stage") or "crawl",
+                                message=artifact.get("failure_message") or "Crawl failed with fallback artifact.",
+                                url=target.url,
+                                retryable=False,
+                                details={
+                                    "target": asdict(target),
+                                    "artifact_key": artifact.get("artifact_key"),
+                                    "failures": artifact.get("failures", []),
+                                },
+                            ),
+                            save=save,
+                        )
                     if artifact.get("skip_save"):
                         stats.skipped += 1
                         self.logger.info(
@@ -190,27 +211,27 @@ class SmartCrawler:
                         continue
                     if save and self.store:
                         permit_collection = self._collection_for_url(self.options.permit_collection, artifact.get("final_url") or target.url)
-                        saved_permits, skipped_permits, permit_record_ids = self._save_objective_records(artifact, permit_collection)
+                        saved_permits, duplicate_permits, permit_record_ids = self._save_objective_records(artifact, permit_collection)
                         artifact["permit_collection"] = permit_collection
                         artifact["permit_record_ids"] = [str(record_id) for record_id in permit_record_ids]
                         permit_records_saved += saved_permits
-                        permit_records_duplicate += skipped_permits
+                        permit_records_duplicate += duplicate_permits
                         stats.saved += saved_permits
-                        stats.duplicates += skipped_permits
+                        stats.duplicates += duplicate_permits
                         if saved_permits:
                             used_permit_collections.add(permit_collection)
                             self.logger.info(
-                                "Saved standardized permit records inserted=%s duplicate_skipped=%s collection=%s url=%s",
+                                "Saved standardized permit records inserted=%s duplicates_inserted=%s collection=%s url=%s",
                                 saved_permits,
-                                skipped_permits,
+                                duplicate_permits,
                                 permit_collection,
                                 target.url,
                             )
-                        elif skipped_permits:
+                        elif duplicate_permits:
                             used_permit_collections.add(permit_collection)
                             self.logger.info(
-                                "Skipped duplicate permit records count=%s collection=%s url=%s",
-                                skipped_permits,
+                                "Saved duplicate permit records count=%s collection=%s url=%s",
+                                duplicate_permits,
                                 permit_collection,
                                 target.url,
                             )
@@ -276,7 +297,12 @@ class SmartCrawler:
         self.logger.info("Rate limit wait domain/url=%s delay_seconds=%s", target.url, self.options.delay_seconds)
         self.rate_limiter.wait(target.url)
         self.logger.info("HTTP fetch start url=%s timeout_seconds=%s", target.url, self.options.request_timeout_seconds)
-        fetch_result = self._fetch_with_retry(target.url)
+        try:
+            fetch_result = self._fetch_with_ssl_fallbacks(target.url)
+        except RetryExhausted as exc:
+            if not is_ssl_certificate_error(exc):
+                raise
+            return self._crawl_target_with_browser_fallback(target, frontier, exc)
         body_size = len(fetch_result.body_bytes or b"") if fetch_result.body_bytes is not None else 0
         self.logger.info(
             "HTTP fetch done status=%s elapsed_ms=%s content_type=%s bytes=%s final_url=%s",
@@ -338,6 +364,7 @@ class SmartCrawler:
             queued_links = self._queue_discoveries(extracted.links, target, frontier, "link")
             self._queue_optional_discoveries(extracted, target, frontier)
             artifact["objective"] = self._extract_objective_from_page(extracted, source_url=fetch_result.final_url)
+            self._run_permit_workflow_if_needed(target, frontier, extracted, artifact)
             artifact["discovered"] = {
                 "links": extracted.links,
                 "files": extracted.files,
@@ -362,7 +389,10 @@ class SmartCrawler:
                 (artifact["objective"] or {}).get("record_count"),
             )
 
-            if self.options.include_browser and self._should_render(extracted):
+            workflow_ran = bool((artifact.get("workflow") or {}).get("ran"))
+            if workflow_ran:
+                self.logger.info("Browser render skipped url=%s reason=permit_workflow_already_rendered", target.url)
+            elif self.options.include_browser and self._should_render(extracted):
                 self.logger.info("Browser render selected url=%s reason=low_text_or_forms_or_app_shell", target.url)
                 try:
                     artifact["browser"] = self._collect_browser_with_retry(target, frontier)
@@ -400,14 +430,162 @@ class SmartCrawler:
         artifact["content_fingerprint"] = self._content_fingerprint(artifact)
         return artifact
 
-    def _fetch_with_retry(self, url: str) -> FetchResult:
+    def _run_permit_workflow_if_needed(
+        self,
+        target: CrawlTarget,
+        frontier: CrawlFrontier,
+        extracted: Any,
+        artifact: Dict[str, Any],
+    ) -> None:
+        if not self.options.enable_permit_workflows or not self.workflow:
+            return
+        if not self.options.include_browser:
+            return
+        if not should_run_workflow(target.url, extracted):
+            return
+
+        self.logger.info(
+            "Permit workflow selected url=%s date_lookback_days=%s max_detail_pages=%s max_pages=%s",
+            target.url,
+            self.options.workflow_date_lookback_days,
+            self.options.workflow_max_detail_pages,
+            self.options.workflow_max_pages,
+        )
+        workflow_options = PermitWorkflowOptions(
+            date_lookback_days=self.options.workflow_date_lookback_days,
+            max_detail_pages=self.options.workflow_max_detail_pages,
+            max_pages=self.options.workflow_max_pages,
+            timeout_ms=self.options.request_timeout_seconds * 1000,
+            wait_until=settings.playwright_wait_until,
+            headless=self.options.browser_headless,
+            user_agent=self.user_agent,
+        )
+        try:
+            workflow_result = self._run_workflow_with_retry(target.url, workflow_options)
+        except RetryExhausted as exc:
+            self.logger.warning(
+                "Permit workflow skipped after retries url=%s attempts=%s error=%s",
+                target.url,
+                self.options.max_retries + 1,
+                exc,
+            )
+            artifact["failures"].append(
+                {
+                    "stage": "permit_workflow",
+                    "message": str(exc),
+                    "retryable": False,
+                    "attempts": self.options.max_retries + 1,
+                }
+            )
+            return
+        artifact["workflow"] = workflow_result.as_dict()
+
+        objective = artifact.get("objective") or {
+            "name": OBJECTIVE_NAME,
+            "score": 0,
+            "is_relevant": False,
+            "standardized_records": [],
+            "record_count": 0,
+        }
+        records = objective.get("standardized_records") or []
+        records.extend(workflow_result.records)
+        objective["standardized_records"] = self._dedupe_records(records)
+        objective["record_count"] = len(objective["standardized_records"])
+        objective["is_relevant"] = objective["is_relevant"] or bool(workflow_result.records)
+        artifact["objective"] = objective
+
+        queued_details = self._queue_discoveries(workflow_result.detail_urls, target, frontier, "workflow_detail")
+        queued_network = self._queue_discoveries(workflow_result.network_urls, target, frontier, "workflow_network")
+        self.logger.info(
+            "Permit workflow done url=%s records=%s detail_urls=%s queued_details=%s network_urls=%s queued_network=%s failures=%s",
+            target.url,
+            len(workflow_result.records),
+            len(workflow_result.detail_urls),
+            queued_details,
+            len(workflow_result.network_urls),
+            queued_network,
+            len(workflow_result.failures),
+        )
+
+    def _run_workflow_with_retry(self, url: str, workflow_options: PermitWorkflowOptions) -> Any:
+        attempt = 0
+
+        def operation() -> Any:
+            nonlocal attempt
+            attempt += 1
+            self.logger.info("Permit workflow attempt %s/%s url=%s", attempt, self.options.max_retries + 1, url)
+            if not self.workflow:
+                raise RuntimeError("Permit workflow is not configured.")
+            result = self.workflow.run(url, run_id=self.run_id, options=workflow_options)
+            if result.failures and not result.records:
+                raise RuntimeError(result.failures[0].get("message") or "Permit workflow failed without records.")
+            return result
+
+        return with_retries(
+            operation,
+            max_retries=self.options.max_retries,
+            backoff_seconds=self.options.backoff_seconds,
+        )
+
+    def _dedupe_records(self, records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        seen = set()
+        out = []
+        for record in records:
+            identity = (record.get("record_key"), record.get("record_fingerprint"))
+            if identity in seen:
+                continue
+            seen.add(identity)
+            out.append(record)
+        return out
+
+    def _fetch_with_ssl_fallbacks(self, url: str) -> FetchResult:
+        try:
+            return self._fetch_with_retry(url, verify=True, transport_label="default_ca")
+        except RetryExhausted as exc:
+            if not is_ssl_certificate_error(exc):
+                raise
+
+            ca_bundle = system_ca_bundle_path()
+            if not ca_bundle:
+                self.logger.warning(
+                    "HTTP SSL verification failed and no system CA bundle was found url=%s error=%s",
+                    url,
+                    exc,
+                )
+                raise
+
+            self.logger.warning(
+                "HTTP SSL verification failed; retrying with system CA bundle url=%s ca_bundle=%s error=%s",
+                url,
+                ca_bundle,
+                exc,
+            )
+            try:
+                return self._fetch_with_retry(url, verify=ca_bundle, transport_label="system_ca_bundle")
+            except RetryExhausted as ca_exc:
+                if is_ssl_certificate_error(ca_exc):
+                    self.logger.warning(
+                        "HTTP retry with system CA bundle still failed SSL verification url=%s ca_bundle=%s error=%s",
+                        url,
+                        ca_bundle,
+                        ca_exc,
+                    )
+                raise
+
+    def _fetch_with_retry(self, url: str, *, verify: bool | str = True, transport_label: str = "default_ca") -> FetchResult:
         attempt = 0
 
         def operation() -> FetchResult:
             nonlocal attempt
             attempt += 1
-            self.logger.info("HTTP attempt %s/%s url=%s", attempt, self.options.max_retries + 1, url)
-            result = self.fetcher.fetch(url)
+            self.logger.info(
+                "HTTP attempt %s/%s transport=%s url=%s",
+                attempt,
+                self.options.max_retries + 1,
+                transport_label,
+                url,
+            )
+            result = self.fetcher.fetch(url, verify=verify)
             if result.status_code in RETRYABLE_STATUS_CODES:
                 self.logger.warning("Retryable HTTP status=%s url=%s", result.status_code, url)
                 raise RuntimeError(f"Retryable HTTP status {result.status_code}")
@@ -417,6 +595,120 @@ class SmartCrawler:
             operation,
             max_retries=self.options.max_retries,
             backoff_seconds=self.options.backoff_seconds,
+        )
+
+    def _crawl_target_with_browser_fallback(
+        self,
+        target: CrawlTarget,
+        frontier: CrawlFrontier,
+        ssl_error: BaseException,
+    ) -> Dict[str, Any]:
+        if not self.options.include_browser:
+            raise RuntimeError("HTTP SSL verification failed and browser fallback is disabled.") from ssl_error
+
+        self.logger.warning(
+            "HTTP SSL verification failed; falling back to Playwright browser url=%s error=%s",
+            target.url,
+            ssl_error,
+        )
+        artifact: Dict[str, Any] = {
+            "artifact_key": self._artifact_key(target.url, "page"),
+            "run_id": self.run_id,
+            "artifact_type": "page",
+            "target": asdict(target),
+            "url": target.url,
+            "final_url": target.url,
+            "status_code": None,
+            "headers": {},
+            "content_type": "text/html",
+            "elapsed_ms": None,
+            "crawled_at": utc_now(),
+            "http": {
+                "body_size_bytes": 0,
+                "body_sha256": None,
+                "body_stored": False,
+                "body_storage_reason": "http_ssl_failed_browser_fallback_used",
+            },
+            "browser": None,
+            "extracted": None,
+            "discovered": {"links": [], "files": [], "feeds": [], "sitemaps": [], "api_candidates": []},
+            "objective": None,
+            "failures": [
+                {
+                    "stage": "http_fetch_ssl",
+                    "message": str(ssl_error),
+                    "retryable": False,
+                    "fallback": "browser",
+                }
+            ],
+        }
+
+        try:
+            browser_payload = self._collect_browser_with_retry(target, frontier)
+        except RetryExhausted as browser_error:
+            artifact["failures"].append(
+                {
+                    "stage": "browser_ssl_fallback",
+                    "message": str(browser_error),
+                    "retryable": False,
+                    "attempts": self.options.max_retries + 1,
+                }
+            )
+            artifact["crawl_failed"] = True
+            artifact["failure_stage"] = "browser_ssl_fallback"
+            artifact["failure_message"] = "HTTP SSL fallback and browser fallback both failed."
+            artifact["content_fingerprint"] = self._content_fingerprint(artifact)
+            self.logger.warning(
+                "Browser SSL fallback failed after retries url=%s attempts=%s error=%s",
+                target.url,
+                self.options.max_retries + 1,
+                browser_error,
+            )
+            return artifact
+
+        artifact["browser"] = browser_payload
+        artifact["final_url"] = browser_payload.get("final_url") or target.url
+        rendered_extracted = browser_payload.get("rendered_extracted") or {}
+        artifact["extracted"] = rendered_extracted
+        artifact["objective"] = browser_payload.get("objective")
+        artifact["discovered"] = {
+            "links": rendered_extracted.get("links", []),
+            "files": rendered_extracted.get("files", []),
+            "feeds": rendered_extracted.get("feeds", []),
+            "sitemaps": rendered_extracted.get("sitemaps", []),
+            "api_candidates": rendered_extracted.get("api_candidates", []),
+        }
+        rendered_page = self._extracted_page_from_payload(rendered_extracted, artifact["final_url"])
+        if rendered_page is not None:
+            self._run_permit_workflow_if_needed(target, frontier, rendered_page, artifact)
+        artifact["content_fingerprint"] = self._content_fingerprint(artifact)
+        self.logger.info(
+            "Browser SSL fallback succeeded url=%s final_url=%s objective_records=%s",
+            target.url,
+            artifact["final_url"],
+            (artifact["objective"] or {}).get("record_count"),
+        )
+        return artifact
+
+    def _extracted_page_from_payload(self, payload: Dict[str, Any], source_url: str) -> Optional[ExtractedPage]:
+        if not payload:
+            return None
+        return ExtractedPage(
+            url=payload.get("url") or source_url,
+            title=payload.get("title"),
+            text=payload.get("text") or "",
+            meta=payload.get("meta") or {},
+            links=payload.get("links") or [],
+            feeds=payload.get("feeds") or [],
+            sitemaps=payload.get("sitemaps") or [],
+            files=payload.get("files") or [],
+            api_candidates=payload.get("api_candidates") or [],
+            embedded_json=payload.get("embedded_json") or [],
+            tables=payload.get("tables") or [],
+            forms=payload.get("forms") or [],
+            emails=payload.get("emails") or [],
+            phones=payload.get("phones") or [],
+            raw_html=payload.get("raw_html"),
         )
 
     def _collect_browser_with_retry(self, target: CrawlTarget, frontier: CrawlFrontier) -> Dict[str, Any]:
@@ -620,6 +912,7 @@ class SmartCrawler:
         browser = artifact.get("browser") or {}
         browser_objective = browser.get("objective") or {}
         records.extend(browser_objective.get("standardized_records") or [])
+        records = self._dedupe_records(records)
         if not records:
             return 0, 0, []
         return self.store.save_records(records, collection)

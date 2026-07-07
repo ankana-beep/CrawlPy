@@ -85,6 +85,18 @@ python3 -m scraper_framework.smart_crawler.cli --urls-file seeds.txt --sequentia
 
 With `--sequential-sites`, each URL gets its own crawl run and `--max-pages` applies per website.
 
+Permit search workflows are enabled by default. They can fill safe date fields, click search/submit controls, read network results, paginate, and open likely permit detail pages.
+
+```bash
+python3 -m scraper_framework.smart_crawler.cli --urls-file seeds.txt --sequential-sites --workflow-date-lookback-days 365 --workflow-max-detail-pages 25 --workflow-max-pages 5
+```
+
+Disable workflow automation:
+
+```bash
+python3 -m scraper_framework.smart_crawler.cli --urls-file seeds.txt --sequential-sites --no-workflows
+```
+
 Use HTTP-only mode:
 
 ```bash
