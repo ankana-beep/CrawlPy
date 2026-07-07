@@ -178,6 +178,16 @@ class SmartCrawler:
                 )
                 try:
                     artifact = self._crawl_target(target, frontier)
+                    if artifact.get("skip_save"):
+                        stats.skipped += 1
+                        self.logger.info(
+                            "Skipped saving optional missing resource stage=%s status=%s url=%s",
+                            artifact.get("skip_reason"),
+                            artifact.get("status_code"),
+                            target.url,
+                        )
+                        stats.queued = len(frontier)
+                        continue
                     if save and self.store:
                         permit_collection = self._collection_for_url(self.options.permit_collection, artifact.get("final_url") or target.url)
                         saved_permits, skipped_permits, permit_record_ids = self._save_objective_records(artifact, permit_collection)
@@ -298,6 +308,24 @@ class SmartCrawler:
         }
 
         if _is_http_error(fetch_result):
+            if _is_optional_missing_resource(target, fetch_result):
+                artifact["skip_save"] = True
+                artifact["skip_reason"] = "optional_resource_not_found"
+                artifact["failures"].append(
+                    {
+                        "stage": target.source,
+                        "message": f"Optional resource returned HTTP {fetch_result.status_code}",
+                        "retryable": False,
+                    }
+                )
+                self.logger.info(
+                    "Optional resource missing; continuing source=%s status=%s url=%s",
+                    target.source,
+                    fetch_result.status_code,
+                    target.url,
+                )
+                artifact["content_fingerprint"] = self._content_fingerprint(artifact)
+                return artifact
             raise RuntimeError(f"HTTP status {fetch_result.status_code}")
 
         if _is_html(fetch_result) and fetch_result.body_text:
@@ -646,3 +674,12 @@ def _is_html(result: FetchResult) -> bool:
 
 def _is_http_error(result: FetchResult) -> bool:
     return result.status_code is not None and result.status_code >= 400
+
+
+def _is_optional_missing_resource(target: CrawlTarget, result: FetchResult) -> bool:
+    if result.status_code not in {404, 410}:
+        return False
+    if target.source in {"sitemap", "feed", "document_url"}:
+        return True
+    lowered = target.url.lower()
+    return lowered.endswith(("/sitemap.xml", "/robots.txt")) or "sitemap" in lowered
