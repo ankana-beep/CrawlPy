@@ -842,7 +842,7 @@ MONGO_URI = _build_mongo_uri_from_env()
 
 PAGE_LOAD_TIMEOUT_MS = 30_000
 POST_ACTION_WAIT_MS = 1_500       # settle time after a postback
-BATCH_SAVE_EVERY_N_PAGES = 2
+BATCH_SAVE_EVERY_N_PAGES = 10
 MAX_RETRIES = 3
 HEADLESS = (os.getenv("PLAYWRIGHT_HEADLESS", "true").strip().lower() in {"1", "true", "yes", "y"})
 USER_AGENT = "Mozilla/5.0 (compatible; PermitResearchBot/1.0; contact=you@example.com)"
