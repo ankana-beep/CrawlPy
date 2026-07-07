@@ -1,225 +1,87 @@
 flowchart TD
-    %% Smart Crawler architecture, focused on scraper_framework/smart_crawler.
+    %% High-level smart crawler architecture.
 
-    subgraph InputLayer["Input and CLI Layer"]
-        CLI["cli.py<br/>python3 -m scraper_framework.smart_crawler.cli"]
-        Args["CLI args<br/>urls, --urls-file, --max-pages, --max-depth,<br/>--no-save, --no-browser, --ignore-robots,<br/>--allow-cross-domain, --save-artifacts,<br/>--permit-collection, --single-collection,<br/>workflow limits"]
-        CollectUrls["_collect_urls()<br/>merge CLI URLs + urls-file<br/>skip blank/comment lines"]
-        BuildOptions["_build_options()<br/>create CrawlOptions"]
-        Sequential{"--sequential-sites?"}
-        CrawlOptions["CrawlOptions<br/>crawl limits, browser flags, robots flag,<br/>Mongo collections, objective mode,<br/>workflow controls, retry/backoff"]
+    subgraph Input["1. Input"]
+        CLI["CLI<br/>smart_crawler.cli"]
+        Seeds["Seed URLs<br/>CLI args or seeds.txt"]
+        Options["CrawlOptions<br/>limits, browser, robots,<br/>workflow, Mongo collections"]
     end
 
-    subgraph ConfigLayer["Config and Runtime Settings"]
-        Settings["settings.py<br/>loads scraper_framework/.env"]
-        UserAgents["user_agents_pool.txt<br/>random user agent fallback"]
-        MongoConfig["Mongo settings<br/>MONGODB_URI or host/user/pass/db/params"]
-        PlaywrightConfig["Playwright defaults<br/>timeout_ms, wait_until"]
+    subgraph CrawlControl["2. Crawl Control"]
+        Crawler["SmartCrawler"]
+        Frontier["CrawlFrontier<br/>queue, seen, visited,<br/>same-domain rules, priority URLs"]
+        Guards["Safety Guards<br/>robots.txt, skip login/captcha,<br/>skip static assets, rate limit"]
     end
 
-    subgraph CrawlerLayer["SmartCrawler Orchestration"]
-        SmartCrawler["SmartCrawler<br/>run_id, logger, store, fetcher,<br/>extractor, objective_extractor,<br/>workflow, rate_limiter, robots guard"]
-        NormalizeSeeds["normalize_url(seed)<br/>drop invalid non-http URLs"]
-        Frontier["CrawlFrontier<br/>queue, seen, visited,<br/>seed_domains, same-domain filtering,<br/>priority insert for objective URLs"]
-        Stats["CrawlStats<br/>queued, visited, saved,<br/>failed, skipped, duplicates"]
-        Loop{"queue not empty<br/>and visited < max_pages?"}
-        Pop["frontier.pop()"]
-        AlreadyVisited{"target in visited?"}
-        SkipUtility{"should_skip_url?<br/>captcha/login/logout"}
-        SkipStatic{"looks_like_static_asset?"}
-        Robots{"robots.txt allowed?"}
-        MarkVisited["frontier.visited.add<br/>stats.visited += 1"]
-        CrawlTarget["_crawl_target(target, frontier)"]
-        FailureCapture["_record_failure()<br/>failure collection per domain"]
-        ProgressLog["progress log<br/>run_id, visited, saved,<br/>duplicates, failed, skipped, queued"]
-        Finish["result JSON<br/>run_id, stats, artifact ids,<br/>permit counts, collections"]
-        Cleanup["close BrowserCollector<br/>close Mongo store"]
+    subgraph Fetch["3. Page Access"]
+        HTTP["HTTP Fetch<br/>curl_cffi"]
+        SSLFallback["SSL Fallback<br/>default CA -> system CA"]
+        BrowserFallback["Browser Fallback<br/>Playwright when HTTP SSL fails"]
+        BrowserRender["Browser Render<br/>Playwright for forms, app shells,<br/>low-text pages"]
     end
 
-    subgraph HTTPFetchLayer["HTTP Fetch and SSL Fallback Layer"]
-        RateLimit["DomainRateLimiter.wait()<br/>per-domain delay"]
-        FetchSSL["_fetch_with_ssl_fallbacks()"]
-        FetchDefault["_fetch_with_retry(verify=True)<br/>transport=default_ca"]
-        RetryPolicy["with_retries()<br/>max_retries + exponential backoff<br/>retryable HTTP statuses: 408,425,429,500,502,503,504"]
-        HTTPFetcher["SmartHTTPFetcher.fetch()<br/>curl_cffi requests.get<br/>headers, timeout, proxies,<br/>allow_redirects, verify"]
-        SSLFail{"SSL certificate error?"}
-        FindCABundle["system_ca_bundle_path()<br/>SSL_CERT_FILE, REQUESTS_CA_BUNDLE,<br/>CURL_CA_BUNDLE, common Linux CA paths"]
-        FetchSystemCA["_fetch_with_retry(verify=system_ca_bundle)<br/>transport=system_ca_bundle"]
-        BrowserFallback["_crawl_target_with_browser_fallback()<br/>used when HTTP SSL still fails"]
-        FetchResult["FetchResult<br/>url, final_url, status_code,<br/>headers, content_type, body_text/body_bytes,<br/>elapsed_ms"]
-        HTTPError{"HTTP status >= 400?"}
-        OptionalMissing{"optional 404/410?<br/>sitemap/feed/document_url"}
-        SkipSaveArtifact["artifact.skip_save=True<br/>do not save optional missing resource"]
+    subgraph Extract["4. Extraction"]
+        GenericExtract["GenericExtractor<br/>HTML, JSON, XML, CSV,<br/>PDF/Excel metadata or text"]
+        PageData["ExtractedPage<br/>text, links, tables, forms,<br/>files, feeds, sitemaps, APIs"]
+        Discoveries["Discovered URLs<br/>queued back into frontier"]
     end
 
-    subgraph ExtractionLayer["Generic Extraction Layer"]
-        HTMLCheck{"HTML response<br/>or html-looking body?"}
-        ExtractHTML["GenericExtractor.extract_html()<br/>BeautifulSoup + lxml"]
-        ExtractFetch["GenericExtractor.extract_fetch_result()<br/>json, xml, csv, pdf, excel, text, binary"]
-        ExtractedPage["ExtractedPage<br/>title, text, meta, links,<br/>feeds, sitemaps, files, api_candidates,<br/>embedded_json, tables, forms,<br/>emails, phones, raw_html"]
-        Discovered["discovered payload<br/>links, files, feeds, sitemaps,<br/>api_candidates"]
-        QueueLinks["_queue_discoveries()<br/>skip utility/static, depth checks,<br/>files/feeds allowed beyond depth,<br/>priority by objective score"]
-        QueueOptional["_queue_optional_discoveries()<br/>files, feeds, sitemaps, api candidates"]
-        NonHTMLPayload["non-HTML payload<br/>parsed data + discovered_urls"]
+    subgraph Permit["5. Permit Intelligence"]
+        Objective["PermitObjectiveExtractor<br/>score permit relevance"]
+        StandardRecords["Standardized Permit Records<br/>permit number, type, dates,<br/>address, parcel, contractor,<br/>valuation, confidence"]
+        Workflow["Permit Workflow<br/>safe date fill, search click,<br/>pagination, detail pages,<br/>network JSON extraction"]
     end
 
-    subgraph ObjectiveLayer["Permit Objective Extraction"]
-        ObjectiveExtractor["PermitObjectiveExtractor<br/>enabled for building_permits<br/>and legacy residential_building_permits"]
-        ScoreURL["score_url()<br/>permit/residential keywords<br/>used for frontier priority"]
-        ScorePage["score_page()<br/>title/text keywords, forms,<br/>permit-looking tables"]
-        PageRecords["extract_page_records()<br/>tables, embedded JSON,<br/>text fallback"]
-        PayloadRecords["extract_payload_records()<br/>walk JSON/XML/API payloads"]
-        Standardize["_standardize()<br/>clean values, category,<br/>is_residential, source_url,<br/>source_domain, run_id, raw,<br/>extracted_at, confidence"]
-        RecordIdentity["record_key<br/>domain + permit_number + address + parcel + type"]
-        RecordSnapshot["record_fingerprint<br/>stable cleaned fields<br/>excluding run_id/source/raw/extracted_at"]
-        ObjectivePayload["artifact.objective<br/>name, score, is_relevant,<br/>standardized_records, record_count"]
+    subgraph Output["6. Persistence"]
+        Artifact["Crawl Artifact<br/>debug evidence, optional"]
+        Fingerprint["Record Identity<br/>record_key + record_fingerprint"]
+        Mongo["MongoDB"]
+        PermitCollection["Permit Collections<br/>building_permits__domain"]
+        ArtifactCollection["Artifact Collections<br/>permit_crawl_artifacts__domain"]
+        FailureCollection["Failure Collections<br/>smart_crawl_failures__domain"]
     end
 
-    subgraph BrowserLayer["Browser Render Layer"]
-        ShouldRender{"include_browser<br/>and low text / forms / app shell?"}
-        BrowserRetry["_collect_browser_with_retry()<br/>bounded retries and browser reset"]
-        BrowserCollector["BrowserCollector<br/>Playwright chromium context"]
-        BrowserCollect["collect(url)<br/>goto, wait, page.content,<br/>body text, title, cookies,<br/>localStorage, sessionStorage,<br/>network calls, console, optional screenshot"]
-        NetworkCapture["_capture_request/_capture_response<br/>request metadata, response status/headers,<br/>text/json/xml body_base64 up to limit"]
-        RenderedExtract["extract rendered_html<br/>same GenericExtractor"]
-        RenderedQueue["queue rendered links<br/>and response network URLs"]
-        BrowserPayload["artifact.browser<br/>BrowserResult + rendered_extracted<br/>+ browser objective"]
-    end
+    CLI --> Seeds --> Options --> Crawler
+    Crawler --> Frontier
+    Frontier --> Guards
+    Guards --> HTTP
 
-    subgraph WorkflowLayer["Permit Workflow Automation Layer"]
-        WorkflowGate{"enable_permit_workflows<br/>include_browser<br/>should_run_workflow(url, extracted)?"}
-        WorkflowOptions["PermitWorkflowOptions<br/>date_lookback_days,<br/>max_detail_pages,<br/>max_pages, timeout_ms,<br/>wait_until, headless, user_agent"]
-        WorkflowRetry["_run_workflow_with_retry()<br/>retries workflow failures when no records"]
-        GenericWorkflow["GenericPermitWorkflow.run()<br/>safe permit portal automation"]
-        DetectPortal["detect_portal_type()<br/>iworq, accela, energov,<br/>cityview, generic"]
-        WorkflowOpen["Playwright open page<br/>capture network"]
-        WorkflowInitialExtract["initial DOM + network extraction"]
-        SafeSearch["_submit_safe_search()<br/>fill date-looking fields<br/>click search/submit controls<br/>avoid login/logout/delete/remove/cancel"]
-        Pagination["_crawl_pagination()<br/>Next / Load More buttons<br/>up to workflow_max_pages"]
-        DetailUrls["_detail_urls()<br/>permit/record/case/application/detail/capid links"]
-        DetailPages["open detail pages<br/>up to workflow_max_detail_pages"]
-        NetworkPayloads["_network_payloads()<br/>decode base64 response bodies<br/>parse JSON"]
-        WorkflowRecords["workflow records<br/>DOM records + network JSON records<br/>dedupe by record_key/fingerprint"]
-        WorkflowResult["PermitWorkflowResult<br/>ran, portal_type, actions,<br/>records, detail_urls, network_urls, failures"]
-        MergeWorkflow["merge workflow records<br/>into artifact.objective<br/>queue detail_urls and network_urls"]
-    end
+    HTTP --> SSLFallback
+    SSLFallback -- "HTTP works" --> GenericExtract
+    SSLFallback -- "SSL still fails" --> BrowserFallback
+    BrowserFallback --> GenericExtract
 
-    subgraph ArtifactLayer["Artifact Assembly Layer"]
-        BaseArtifact["base artifact<br/>artifact_key, run_id, target,<br/>url/final_url/status/headers/content_type,<br/>elapsed_ms, crawled_at, http,<br/>browser, extracted, discovered,<br/>objective, failures"]
-        HTTPPayload["_http_payload()<br/>body size/hash, storage flags,<br/>text body if up to 1MB and non-static,<br/>binary only if save_binary_files"]
-        ContentFingerprint["_content_fingerprint()<br/>artifact type, URL, status,<br/>content type, http payload,<br/>browser rendered_html, objective records"]
-        FailureArtifact["failure artifact path<br/>crawl_failed, failure_stage,<br/>failure_message, failures list"]
-    end
+    GenericExtract --> PageData
+    PageData --> Discoveries --> Frontier
+    PageData --> Objective
 
-    subgraph StorageLayer["Mongo Storage Layer"]
-        StoreOpen["CrawlMongoStore<br/>opened when save=True"]
-        CollectionForURL["_collection_for_url()<br/>base__domain unless --single-collection"]
-        SaveObjective["_save_objective_records()<br/>collect artifact.objective + browser.objective<br/>in-memory dedupe before save"]
-        SaveRecords["CrawlMongoStore.save_records()<br/>find existing by record_key + record_fingerprint"]
-        DuplicateDecision{"existing record?"}
-        InsertNew["insert permit record<br/>is_duplicate=False"]
-        InsertDuplicate["insert duplicate record<br/>is_duplicate=True<br/>duplicate_of_id=existing_id<br/>duplicate_detected_at"]
-        RecordCollections["permit record collections<br/>building_permits__domain<br/>or custom permit_collection"]
-        SaveArtifacts{"save_crawl_artifacts?"}
-        FitArtifact["_fit_artifact_for_mongo()<br/>prune oversized body/raw_html/<br/>rendered_html/screenshot/network bodies"]
-        InsertArtifact["insert debug artifact<br/>permit_collection + permit_record_ids"]
-        ArtifactCollections["artifact collections<br/>permit_crawl_artifacts__domain"]
-        SaveFailure["save_failure()<br/>smart_crawl_failures__domain"]
-        FailureCollections["failure collections<br/>robots/crawl/workflow/browser failures"]
-    end
+    Objective --> StandardRecords
+    PageData -- "permit search page or form" --> Workflow
+    Workflow --> StandardRecords
+    Workflow --> Discoveries
 
-    CLI --> Args --> CollectUrls --> Sequential
-    Args --> BuildOptions --> CrawlOptions
-    Settings --> UserAgents --> SmartCrawler
-    Settings --> MongoConfig --> StoreOpen
-    Settings --> PlaywrightConfig --> BrowserCollector
-    CrawlOptions --> SmartCrawler
-    Sequential -- "yes" --> SmartCrawler
-    Sequential -- "no" --> SmartCrawler
+    PageData -- "needs rendering" --> BrowserRender
+    BrowserRender --> GenericExtract
 
-    SmartCrawler --> NormalizeSeeds --> Frontier --> Stats --> Loop
-    Loop -- "yes" --> Pop --> AlreadyVisited
-    AlreadyVisited -- "yes" --> Loop
-    AlreadyVisited -- "no" --> SkipUtility
-    SkipUtility -- "yes" --> Stats
-    SkipUtility -- "no" --> SkipStatic
-    SkipStatic -- "yes" --> Stats
-    SkipStatic -- "no" --> Robots
-    Robots -- "no" --> FailureCapture --> SaveFailure --> FailureCollections
-    Robots -- "yes" --> MarkVisited --> CrawlTarget
+    StandardRecords --> Fingerprint
+    Fingerprint --> Mongo
+    Mongo --> PermitCollection
 
-    CrawlTarget --> RateLimit --> FetchSSL --> FetchDefault --> RetryPolicy --> HTTPFetcher
-    HTTPFetcher --> SSLFail
-    SSLFail -- "no" --> FetchResult
-    SSLFail -- "yes" --> FindCABundle --> FetchSystemCA --> RetryPolicy
-    FetchSystemCA --> SSLFail
-    SSLFail -- "still yes" --> BrowserFallback
+    PageData --> Artifact
+    Artifact --> Mongo
+    Mongo --> ArtifactCollection
 
-    FetchResult --> BaseArtifact
-    FetchResult --> HTTPPayload --> BaseArtifact
-    FetchResult --> HTTPError
-    HTTPError -- "yes" --> OptionalMissing
-    OptionalMissing -- "yes" --> SkipSaveArtifact --> Loop
-    OptionalMissing -- "no" --> FailureCapture
-    HTTPError -- "no" --> HTMLCheck
+    Guards -- "blocked or failed" --> FailureCollection
+    HTTP -- "non-SSL failure after retries" --> FailureCollection
+    BrowserFallback -- "browser also fails" --> FailureCollection
+    Workflow -- "workflow failure" --> FailureCollection
 
-    HTMLCheck -- "yes" --> ExtractHTML --> ExtractedPage
-    HTMLCheck -- "no" --> ExtractFetch --> NonHTMLPayload
-    ExtractedPage --> Discovered
-    ExtractedPage --> QueueLinks --> Frontier
-    ExtractedPage --> QueueOptional --> Frontier
-    NonHTMLPayload --> PayloadRecords
-    NonHTMLPayload --> QueueLinks
+    classDef main fill:#e8f3ff,stroke:#3b82f6,color:#111827
+    classDef data fill:#ecfdf5,stroke:#10b981,color:#111827
+    classDef store fill:#fff7ed,stroke:#f97316,color:#111827
+    classDef warn fill:#fef2f2,stroke:#ef4444,color:#111827
 
-    ExtractedPage --> ScorePage --> PageRecords
-    ObjectiveExtractor --> ScoreURL --> Frontier
-    PageRecords --> Standardize --> RecordIdentity --> ObjectivePayload
-    Standardize --> RecordSnapshot --> ObjectivePayload
-    PayloadRecords --> Standardize
-    ObjectivePayload --> BaseArtifact
-
-    ExtractedPage --> WorkflowGate
-    BrowserFallback --> BrowserRetry
-    BrowserFallback --> FailureArtifact
-    BrowserRetry --> BrowserCollector --> BrowserCollect --> NetworkCapture
-    BrowserCollect --> RenderedExtract --> RenderedQueue --> Frontier
-    RenderedExtract --> BrowserPayload --> BaseArtifact
-    BrowserPayload --> ObjectivePayload
-    BrowserPayload --> WorkflowGate
-
-    ExtractedPage --> ShouldRender
-    ShouldRender -- "yes" --> BrowserRetry
-    ShouldRender -- "no" --> ContentFingerprint
-
-    WorkflowGate -- "yes" --> WorkflowOptions --> WorkflowRetry --> GenericWorkflow
-    GenericWorkflow --> WorkflowOpen --> DetectPortal
-    WorkflowOpen --> WorkflowInitialExtract
-    WorkflowInitialExtract --> SafeSearch --> Pagination --> DetailUrls --> DetailPages
-    WorkflowOpen --> NetworkPayloads
-    DetailPages --> NetworkPayloads
-    WorkflowInitialExtract --> WorkflowRecords
-    DetailPages --> WorkflowRecords
-    NetworkPayloads --> PayloadRecords
-    PayloadRecords --> WorkflowRecords
-    WorkflowRecords --> WorkflowResult --> MergeWorkflow --> ObjectivePayload
-    MergeWorkflow --> Frontier
-    WorkflowGate -- "no" --> ContentFingerprint
-
-    BaseArtifact --> ContentFingerprint
-    FailureArtifact --> ContentFingerprint
-    ContentFingerprint --> SaveObjective
-
-    StoreOpen --> SaveObjective
-    SaveObjective --> CollectionForURL --> RecordCollections
-    SaveObjective --> SaveRecords --> DuplicateDecision
-    DuplicateDecision -- "no" --> InsertNew --> RecordCollections
-    DuplicateDecision -- "yes" --> InsertDuplicate --> RecordCollections
-    SaveObjective --> SaveArtifacts
-    SaveArtifacts -- "yes" --> FitArtifact --> InsertArtifact --> ArtifactCollections
-    SaveArtifacts -- "no" --> ProgressLog
-    InsertNew --> ProgressLog
-    InsertDuplicate --> ProgressLog
-    InsertArtifact --> ProgressLog
-    FailureCapture --> ProgressLog
-    ProgressLog --> Loop
-    Loop -- "no" --> Finish --> Cleanup
+    class Crawler,Frontier,HTTP,BrowserFallback,BrowserRender,GenericExtract,Objective,Workflow main
+    class Seeds,Options,PageData,Discoveries,StandardRecords,Fingerprint,Artifact data
+    class Mongo,PermitCollection,ArtifactCollection,FailureCollection store
+    class Guards,SSLFallback warn
