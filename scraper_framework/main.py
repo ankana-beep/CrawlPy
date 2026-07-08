@@ -4,6 +4,8 @@ import argparse
 from pathlib import Path
 from typing import Iterable
 
+from adapters.accela.constants import URLS as ACCELA_URLS
+from adapters.accela.adapter import AccelaAdapter
 from adapters.base.base_adapter import BaseAdapter
 from adapters.detector import AdapterDetector, build_adapters
 from db.mongo_client import MongoStore
@@ -26,8 +28,39 @@ def load_urls_from_file(file_path: str | Path) -> list[str]:
     return urls
 
 
-def crawl(urls: Iterable[str]) -> None:
+def load_accela_urls(agencies: Iterable[str] | None = None, modules: Iterable[str] | None = None) -> list[str]:
+    agency_filter = {value.strip().upper() for value in (agencies or []) if value.strip()}
+    module_filter = {value.strip().lower() for value in (modules or []) if value.strip()}
+    selected_urls: list[str] = []
+
+    for agency_key, agency_config in ACCELA_URLS.items():
+        if agency_filter and agency_key.upper() not in agency_filter:
+            continue
+
+        target_scrape_urls = agency_config.get("target_scrape_urls", {})
+        ordered_modules = agency_config.get("modules", list(target_scrape_urls.keys()))
+        for module_name in ordered_modules:
+            if module_filter and module_name.lower() not in module_filter:
+                continue
+
+            url = target_scrape_urls.get(module_name)
+            if url:
+                selected_urls.append(url)
+
+    return selected_urls
+
+
+def limit_urls(urls: list[str], limit: int | None = None) -> list[str]:
+    if limit is None or limit <= 0:
+        return urls
+    return urls[:limit]
+
+
+def crawl(urls: Iterable[str], headed: bool = False) -> None:
     adapters: list[BaseAdapter] = build_adapters()
+    for adapter in adapters:
+        if isinstance(adapter, AccelaAdapter):
+            adapter.headed = headed
     detector = AdapterDetector(adapters)
     store = MongoStore()
 
@@ -40,7 +73,7 @@ def crawl(urls: Iterable[str]) -> None:
         logger.info("Crawling %s", source_url)
 
         try:
-            bootstrap_adapter = adapters[0]
+            bootstrap_adapter = AccelaAdapter(headed=headed) if "accela" in source_url.lower() else adapters[0]
             html = bootstrap_adapter.fetch_html(source_url)
             soup = bootstrap_adapter.parse(html)
 
@@ -79,6 +112,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Universal Permit Crawler")
     default_urls_file = Path(__file__).resolve().parent / "urls.txt"
     parser.add_argument(
+        "--source",
+        choices=("accela_constants", "file"),
+        default="accela_constants",
+        help="Where to load URLs from. Defaults to the Accela URLS constant.",
+    )
+    parser.add_argument(
         "--url",
         action="append",
         default=[],
@@ -89,6 +128,29 @@ def parse_args() -> argparse.Namespace:
         default=str(default_urls_file),
         help="Path to a file containing one URL per line",
     )
+    parser.add_argument(
+        "--agency",
+        action="append",
+        default=[],
+        help="Agency key from adapters/accela/constants.py, e.g. SAN_DIEGO or SACRAMENTO.",
+    )
+    parser.add_argument(
+        "--module",
+        action="append",
+        default=[],
+        help="Module name filter, e.g. Building, Planning, Enforcement.",
+    )
+    parser.add_argument(
+        "--headed",
+        action="store_true",
+        help="Open Accela pages in a visible Playwright browser window.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Limit the number of resolved URLs, useful for testing with 1 site.",
+    )
     return parser.parse_args()
 
 
@@ -97,10 +159,17 @@ def main() -> None:
 
     if args.url:
         target_urls = args.url
+    elif args.source == "accela_constants":
+        target_urls = load_accela_urls(args.agency, args.module)
     else:
         target_urls = load_urls_from_file(args.urls)
 
-    crawl(target_urls)
+    target_urls = limit_urls(target_urls, args.limit)
+
+    if not target_urls:
+        raise ValueError("No URLs were resolved. Check your constants, agency filters, or module filters.")
+
+    crawl(target_urls, headed=args.headed)
 
 
 if __name__ == "__main__":

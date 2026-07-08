@@ -1,38 +1,94 @@
-# Universal Permit Crawler (Lean Refactor)
+# Permit Portal Scraper Automation
 
-This project is a simplified adapter-based permit crawler.
+An automation and scraping project built with Playwright to work reliably against ASP.NET-style municipal permit portals such as Accela.
 
-It supports two URL input modes and uses one shared pipeline:
+## The Problem
 
-1. Get URLs
-2. Detect platform adapter
-3. Scrape permit data
-4. Normalize to a canonical schema
-5. Store in MongoDB
-6. Continue to next URL even if one fails
+The target permit form uses an ASP.NET `<select>` with an inline `onchange` postback:
 
-A generic adapter is always used as fallback when no specific platform matches.
+```html
+onchange="var p = new ProcessLoading(); p.showLoading(); __doPostBack(...)"
+```
 
-## What Was Simplified
+That means a simple dropdown selection is not enough. As soon as one option is chosen, the page can reload, rerender controls, and lose state if the script moves too fast.
 
-This refactor intentionally avoids future-extensibility scaffolding (no Playwright fallback orchestration, distributed workers, scheduler, etc.).
+## Current Accela Flow
 
-The code keeps only practical components needed for current crawling and MongoDB storage.
+The current Playwright workflow lives in [workflow.py](/home/sourabh/CrawlPy/scraper_framework/adapters/accela/workflow.py) and behaves like this:
 
-## Project Structure
+1. Open the target Accela URL in Playwright.
+2. Wait for `networkidle`.
+3. Read all options from `#ctl00_PlaceHolderMain_generalSearchForm_ddlGSPermitType`.
+4. Keep only the exact labels listed in `SELECTOR_PRIORITIES`.
+5. For each matching label, open a new browser tab.
+6. In that new tab, reopen the same URL.
+7. Select the permit type with `select_option(label=...)`.
+8. Wait again for the ASP.NET postback to finish.
+9. Apply the dynamic date range.
+10. Hand off to `after_residential_selection(...)` for the next search/scrape logic.
 
-- `scraper_framework/main.py`: CLI entry point and crawl loop
-- `scraper_framework/adapters/base/`: shared base adapter + exceptions
-- `scraper_framework/adapters/accela/`: adapter, parser, extractor, detector, constants
-- `scraper_framework/adapters/mygovernmentonline/`: adapter, parser, extractor, detector, constants
-- `scraper_framework/adapters/tyler_energov/`: adapter, parser, extractor, detector, constants
-- `scraper_framework/adapters/opengov/`: adapter, parser, extractor, detector, constants
-- `scraper_framework/adapters/arcgis/`: adapter, parser, extractor, detector, constants
-- `scraper_framework/adapters/civicplus/`: adapter, parser, extractor, detector, constants
-- `scraper_framework/adapters/generic/`: fallback adapter, parser, extractor, detector
-- `scraper_framework/db/mongo_client.py`: MongoDB persistence
-- `scraper_framework/config/settings.py`: environment-driven settings
-- `scraper_framework/urls.txt`: default URL list (one URL per line)
+## Constants That Drive The Flow
+
+These values live in [constants.py](/home/sourabh/CrawlPy/scraper_framework/adapters/accela/constants.py):
+
+- `URLS`: agency and module URLs
+- `SELECTOR_PRIORITIES`: exact permit-type labels to search
+- `SEARCH_WINDOW_YEARS`: current lookback window for the date filter
+
+## Date Behavior
+
+For every selected permit type tab, the workflow sets:
+
+- start date = today minus `SEARCH_WINDOW_YEARS`
+- end date = today
+
+These values are filled into:
+
+- `#ctl00_PlaceHolderMain_generalSearchForm_txtGSStartDate`
+- `#ctl00_PlaceHolderMain_generalSearchForm_txtGSEndDate`
+
+Then the script tabs out so the portal registers the date change.
+
+## Where To Add More Logic
+
+Write the next site-specific steps in:
+
+- [workflow.py](/home/sourabh/CrawlPy/scraper_framework/adapters/accela/workflow.py) -> `after_residential_selection(...)`
+
+That is the right place to add:
+
+- verify sticky selection
+- click Search
+- wait for result grid
+- paginate
+- scrape rows or detail pages
+- save/export data
+
+## Test Commands
+
+Run one URL only:
+
+```bash
+python3 scraper_framework/main.py --headed --limit 1
+```
+
+Run one agency only:
+
+```bash
+python3 scraper_framework/main.py --headed --limit 1 --agency PASCO_COUNTY
+```
+
+Run one agency/module only:
+
+```bash
+python3 scraper_framework/main.py --headed --limit 1 --agency PASCO_COUNTY --module Building
+```
+
+Run all resolved URLs headless:
+
+```bash
+python3 scraper_framework/main.py
+```
 
 ## Setup
 
@@ -41,54 +97,7 @@ cd CrawlPy
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+python3 -m playwright install chromium
 ```
 
-Update `scraper_framework/.env` with MongoDB values.
-
-## Run
-
-### Mode 1: Single or repeated `--url`
-
-```bash
-python scraper_framework/main.py --url https://permits.city.gov/CitizenAccess/
-python scraper_framework/main.py --url https://a.example --url https://b.example
-```
-
-### Mode 2: URLs from file
-
-```bash
-python scraper_framework/main.py --urls scraper_framework/urls.txt
-```
-
-If `--url` is not provided, the crawler reads from `--urls` (default: `urls.txt` in current working directory).
-
-## MongoDB Collections
-
-- `sources`
-- `crawl_runs`
-- `crawl_logs`
-- `permits`
-
-Each permit document stores:
-
-- `source_url`
-- `adapter_name`
-- `crawl_timestamp`
-- `normalized_data`
-- `raw_data`
-- `crawl_status`
-
-## Canonical Normalized Schema
-
-- `record_number`
-- `status`
-- `address`
-- `record_type`
-- `description`
-- `issue_date`
-- `applicant`
-- `contractor`
-- `owner`
-- `parcel`
-- `valuation`
-
+Update `scraper_framework/.env` with MongoDB values before full runs.

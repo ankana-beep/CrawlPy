@@ -38,6 +38,9 @@ class BaseAdapter(ABC):
     def parse_html(self, html: str) -> BeautifulSoup:
         return BeautifulSoup(html, "html.parser")
 
+    def parse(self, html: str) -> BeautifulSoup:
+        return self.parse_html(html)
+
     @abstractmethod
     def can_handle(self, url: str, html: str, soup: BeautifulSoup) -> bool:
         raise NotImplementedError
