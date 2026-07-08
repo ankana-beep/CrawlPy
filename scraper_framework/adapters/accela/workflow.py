@@ -20,6 +20,8 @@ class AccelaPlaywrightWorkflow:
     end_date_selector = "#ctl00_PlaceHolderMain_generalSearchForm_txtGSEndDate"
     search_button_selector = "#ctl00_PlaceHolderMain_btnNewSearch"
     results_page_element_indicator = ".ACA_GridView, #ctl00_PlaceHolderMain_DataGrid"
+    pagination_link_selector = ".aca_pagination td.aca_pagination_td a"
+    pagination_cell_selector = ".aca_pagination td.aca_pagination_td"
 
     def __init__(self, request_timeout_ms: int) -> None:
         self.request_timeout_ms = request_timeout_ms
@@ -78,7 +80,7 @@ class AccelaPlaywrightWorkflow:
 
     def after_residential_selection(self, page: Any, url: str, option_text: str) -> None:
         self.click_search(page)
-        self.result_pages_html.append(page.content())
+        self.collect_paginated_results(page, url, option_text)
         # Write the next step for each selected option here.
         # Example steps:
         # - verify the selected value stayed selected after postback
@@ -139,6 +141,78 @@ class AccelaPlaywrightWorkflow:
         print(f"Search result URL: {current_url}")
         print(f"Search result title: {title}")
         print(f"Search result preview:\n{body_preview}")
+
+    def collect_paginated_results(self, page: Any, url: str, option_text: str) -> None:
+        page.wait_for_load_state("networkidle")
+        self.result_pages_html.append(page.content())
+
+        total_pages = self.detect_total_pages(page)
+        print(f"Detected total pages to process: {total_pages}")
+
+        for batch_start in range(2, total_pages + 1, 10):
+            batch_end = min(batch_start + 9, total_pages)
+            print(f"Processing page batch {batch_start} to {batch_end}...")
+
+            for current_page_num in range(batch_start, batch_end + 1):
+                print(f"Opening batch tab for Page {current_page_num}...")
+                batch_page = self.open_target_results_tab(page, url, option_text, current_page_num)
+                if batch_page is None:
+                    print(f"Could not reach Page {current_page_num}. Stopping pagination batch.")
+                    break
+
+                self.result_pages_html.append(batch_page.content())
+                batch_page.close()
+
+    def detect_total_pages(self, page: Any) -> int:
+        page_links = page.locator(self.pagination_link_selector)
+        total_pages = 1
+
+        for index in range(page_links.count()):
+            link_text = page_links.nth(index).inner_text().strip()
+            if link_text.isdigit():
+                total_pages = max(total_pages, int(link_text))
+
+        return total_pages
+
+    def go_to_results_page(self, page: Any, current_page_num: int) -> bool:
+        while True:
+            page_links = page.locator(self.pagination_link_selector)
+            for index in range(page_links.count()):
+                link = page_links.nth(index)
+                link_text = link.inner_text().strip()
+                if link_text == str(current_page_num) and link.is_visible():
+                    self.click_and_wait_for_results(page, link)
+                    return True
+
+            pagination_cells = page.locator(self.pagination_cell_selector)
+            for index in range(pagination_cells.count()):
+                cell = pagination_cells.nth(index)
+                cell_text = cell.inner_text().strip()
+                if "Next" in cell_text:
+                    next_link = cell.locator("a")
+                    if next_link.count() > 0 and next_link.first.is_visible():
+                        self.click_and_wait_for_results(page, next_link.first)
+                        break
+            else:
+                return False
+
+    def open_target_results_tab(self, page: Any, url: str, option_text: str, target_page_num: int) -> Any | None:
+        batch_page = self.open_residential_option_tab(page, url, option_text)
+        self.click_search(batch_page)
+        if target_page_num > 1 and not self.go_to_results_page(batch_page, target_page_num):
+            batch_page.close()
+            return None
+        return batch_page
+
+    def click_and_wait_for_results(self, page: Any, locator: Any) -> None:
+        try:
+            with page.expect_navigation(wait_until="networkidle", timeout=15000):
+                locator.click()
+        except PlaywrightTimeoutError:
+            locator.click(force=True)
+            page.wait_for_load_state("networkidle", timeout=20000)
+
+        page.wait_for_selector(self.results_page_element_indicator, timeout=10000)
 
 # python3 scraper_framework/main.py --headed --limit 1
 # python3 scraper_framework/main.py --headed --limit 1 --agency PASCO_COUNTY

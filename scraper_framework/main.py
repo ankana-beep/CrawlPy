@@ -50,6 +50,24 @@ def load_accela_urls(agencies: Iterable[str] | None = None, modules: Iterable[st
     return selected_urls
 
 
+def get_source_metadata(source_url: str) -> dict[str, str | None]:
+    for agency_key, agency_config in ACCELA_URLS.items():
+        target_scrape_urls = agency_config.get("target_scrape_urls", {})
+        for module_name, configured_url in target_scrape_urls.items():
+            if configured_url == source_url:
+                return {
+                    "agency_key": agency_key,
+                    "county_name": agency_config.get("agency_name"),
+                    "module_name": module_name,
+                }
+
+    return {
+        "agency_key": None,
+        "county_name": None,
+        "module_name": None,
+    }
+
+
 def limit_urls(urls: list[str], limit: int | None = None) -> list[str]:
     if limit is None or limit <= 0:
         return urls
@@ -58,6 +76,7 @@ def limit_urls(urls: list[str], limit: int | None = None) -> list[str]:
 
 def crawl(urls: Iterable[str], headed: bool = False) -> None:
     adapters: list[BaseAdapter] = build_adapters()
+    accela_adapter = next((adapter for adapter in adapters if isinstance(adapter, AccelaAdapter)), None)
     for adapter in adapters:
         if isinstance(adapter, AccelaAdapter):
             adapter.headed = headed
@@ -70,31 +89,75 @@ def crawl(urls: Iterable[str], headed: bool = False) -> None:
             continue
 
         run_id = None
+        source_metadata = get_source_metadata(source_url)
         logger.info("Crawling %s", source_url)
 
         try:
-            bootstrap_adapter = AccelaAdapter(headed=headed) if "accela" in source_url.lower() else adapters[0]
+            bootstrap_adapter = accela_adapter if "accela" in source_url.lower() and accela_adapter else adapters[0]
             html = bootstrap_adapter.fetch_html(source_url)
             soup = bootstrap_adapter.parse(html)
 
             selected_adapter = detector.detect(source_url, html, soup)
-            run_id = store.create_run(source_url, selected_adapter.name)
-            store.save_source(source_url, selected_adapter.name)
-            store.log(run_id, "INFO", "Adapter selected", {"adapter": selected_adapter.name})
+            run_id = store.create_run(
+                source_url,
+                selected_adapter.name,
+                county_name=source_metadata["county_name"],
+                agency_key=source_metadata["agency_key"],
+                module_name=source_metadata["module_name"],
+            )
+            store.save_source(
+                source_url,
+                selected_adapter.name,
+                county_name=source_metadata["county_name"],
+                agency_key=source_metadata["agency_key"],
+                module_name=source_metadata["module_name"],
+            )
+            store.log(
+                run_id,
+                "INFO",
+                "Adapter selected",
+                {
+                    "adapter": selected_adapter.name,
+                    "county_name": source_metadata["county_name"],
+                    "agency_key": source_metadata["agency_key"],
+                    "module_name": source_metadata["module_name"],
+                },
+            )
 
             raw_items = selected_adapter.extract(source_url, html, soup)
+            raw_batches = (
+                selected_adapter.get_raw_batches()
+                if hasattr(selected_adapter, "get_raw_batches")
+                else [raw_items]
+            )
             if not raw_items:
                 store.log(run_id, "INFO", "No permits found", {})
 
-            for raw in raw_items:
-                normalized = selected_adapter.normalize(raw)
-                store.save_permit(
+            for raw_batch in raw_batches:
+                if not raw_batch:
+                    continue
+
+                store.save_raw_result_batch(
+                    county_name=source_metadata["county_name"],
+                    agency_key=source_metadata["agency_key"],
+                    module_name=source_metadata["module_name"],
                     source_url=source_url,
                     adapter_name=selected_adapter.name,
-                    normalized_data=normalized,
-                    raw_data=raw,
-                    crawl_status="success",
+                    raw_items=raw_batch,
                 )
+
+                for raw in raw_batch:
+                    normalized = selected_adapter.normalize(raw)
+                    store.save_permit(
+                        county_name=source_metadata["county_name"],
+                        agency_key=source_metadata["agency_key"],
+                        module_name=source_metadata["module_name"],
+                        source_url=source_url,
+                        adapter_name=selected_adapter.name,
+                        normalized_data=normalized,
+                        raw_data=raw,
+                        crawl_status="success",
+                    )
 
             if run_id is not None:
                 store.complete_run(run_id, status="success")

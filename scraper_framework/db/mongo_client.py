@@ -39,10 +39,20 @@ class MongoStore:
     def _collection(self, name: str) -> Collection:
         return self.db[name]
 
-    def create_run(self, source_url: str, adapter_name: str) -> Any:
+    def create_run(
+        self,
+        source_url: str,
+        adapter_name: str,
+        county_name: str | None = None,
+        agency_key: str | None = None,
+        module_name: str | None = None,
+    ) -> Any:
         payload = {
             "source_url": source_url,
             "adapter_name": adapter_name,
+            "county_name": county_name,
+            "agency_key": agency_key,
+            "module_name": module_name,
             "status": "running",
             "started_at": datetime.now(timezone.utc),
             "finished_at": None,
@@ -74,13 +84,23 @@ class MongoStore:
             }
         )
 
-    def save_source(self, source_url: str, adapter_name: str) -> None:
+    def save_source(
+        self,
+        source_url: str,
+        adapter_name: str,
+        county_name: str | None = None,
+        agency_key: str | None = None,
+        module_name: str | None = None,
+    ) -> None:
         self._collection("sources").update_one(
             {"source_url": source_url},
             {
                 "$set": {
                     "source_url": source_url,
                     "adapter_name": adapter_name,
+                    "county_name": county_name,
+                    "agency_key": agency_key,
+                    "module_name": module_name,
                     "updated_at": datetime.now(timezone.utc),
                 },
                 "$setOnInsert": {"created_at": datetime.now(timezone.utc)},
@@ -90,6 +110,9 @@ class MongoStore:
 
     def save_permit(
         self,
+        county_name: str | None,
+        agency_key: str | None,
+        module_name: str | None,
         source_url: str,
         adapter_name: str,
         normalized_data: dict[str, Any],
@@ -98,11 +121,36 @@ class MongoStore:
     ) -> None:
         self._collection("permits").insert_one(
             {
+                "county_name": county_name,
+                "agency_key": agency_key,
+                "module_name": module_name,
                 "source_url": source_url,
                 "adapter_name": adapter_name,
                 "crawl_timestamp": datetime.now(timezone.utc),
                 "normalized_data": normalized_data,
                 "raw_data": raw_data,
                 "crawl_status": crawl_status,
+            }
+        )
+
+    def save_raw_result_batch(
+        self,
+        county_name: str | None,
+        agency_key: str | None,
+        module_name: str | None,
+        source_url: str,
+        adapter_name: str,
+        raw_items: list[dict[str, Any]],
+    ) -> None:
+        self._collection("raw_permit_batches").insert_one(
+            {
+                "county_name": county_name,
+                "agency_key": agency_key,
+                "module_name": module_name,
+                "source_url": source_url,
+                "adapter_name": adapter_name,
+                "crawl_timestamp": datetime.now(timezone.utc),
+                "record_count": len(raw_items),
+                "raw_items": raw_items,
             }
         )
