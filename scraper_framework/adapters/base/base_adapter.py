@@ -3,10 +3,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-import requests
 from bs4 import BeautifulSoup
 
-from config.settings import REQUEST_TIMEOUT_SECONDS, USER_AGENT
+from adapters.base.client import AdapterClients
 
 
 CANONICAL_FIELDS = [
@@ -26,13 +25,13 @@ CANONICAL_FIELDS = [
 
 class BaseAdapter(ABC):
     name = "base"
+    client_class = AdapterClients
+
+    def __init__(self) -> None:
+        self.client = self.client_class(adapter_name=self.name)
 
     def fetch_html(self, url: str) -> str:
-        response = requests.get(
-            url,
-            headers={"User-Agent": USER_AGENT},
-            timeout=REQUEST_TIMEOUT_SECONDS,
-        )
+        response = self.client.get(url)
         response.raise_for_status()
         return response.text
 
