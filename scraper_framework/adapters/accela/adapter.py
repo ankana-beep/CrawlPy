@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any
 
 from bs4 import BeautifulSoup
@@ -25,18 +26,21 @@ class AccelaAdapter(BaseAdapter):
         )
 
     def fetch_html(self, url: str) -> str:
+        return asyncio.run(self._fetch_html_async(url))
+
+    async def _fetch_html_async(self, url: str) -> str:
         self.raw_batches = []
-        with self.client.build_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=not self.headed)
-            context = self.client.build_browser_context(browser)
-            page = context.new_page()
-            html = self.workflow.run(page, url)
+        async with self.client.build_async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=not self.headed)
+            context = await self.client.build_async_browser_context(browser)
+            page = await context.new_page()
+            html = await self.workflow.run(page, url)
             self.raw_batches = [
                 parse_rows(BeautifulSoup(page_html, "html.parser"), url)
                 for page_html in self.workflow.result_pages_html
             ]
-            context.close()
-            browser.close()
+            await context.close()
+            await browser.close()
             return html
 
     def can_handle(self, url: str, html: str, soup: BeautifulSoup) -> bool:

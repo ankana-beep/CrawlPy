@@ -1,6 +1,11 @@
 ADAPTER_NAME = "accela"
 SIGNATURES = ["citizenaccess", "accela", "record details"]
 SEARCH_WINDOW_YEARS = 2
+MAX_CONCURRENT_PAGES = 4
+WORKER_PAGE_NAVIGATION_RETRIES = 2
+BROWSER_NAVIGATION_TIMEOUT_MS = 60000
+BROWSER_POSTBACK_TIMEOUT_MS = 30000
+BROWSER_RESULTS_TIMEOUT_MS = 30000
 
 
 URLS = {
@@ -50,4 +55,5 @@ SELECTOR_PRIORITIES = [
   "Request CO/TCO/CC",
   "Residential New",
   "Sign Permit",
+  "Residential",
 ]
