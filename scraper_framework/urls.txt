@@ -1,0 +1,4 @@
+# One URL per line
+https://permits.city1.gov/CitizenAccess/
+https://abc.opengov.com/
+https://city.gov/eTRAKiT/
